@@ -4,7 +4,7 @@ import { memoryListener } from '../http-memory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/load-config.js';
 import { safeFile, startDashboard } from '../../src/ui/server.js';
-import { tmpDir } from '../helpers.js';
+import { tmpDir, trySymlink } from '../helpers.js';
 
 describe('dashboard file boundary', () => {
   it('refuses traversal, absolute paths, protected roots, and symlink escapes', () => {
@@ -13,7 +13,7 @@ describe('dashboard file boundary', () => {
     fs.mkdirSync(path.join(dir, 'artifacts'));
     fs.mkdirSync(path.join(dir, 'journal'));
     fs.writeFileSync(path.join(outside, 'secret.json'), 'secret');
-    fs.symlinkSync(path.join(outside, 'secret.json'), path.join(dir, 'artifacts/link.json'));
+    trySymlink(path.join(outside, 'secret.json'), path.join(dir, 'artifacts/link.json'));
     for (const p of [
       '../secret',
       '/etc/passwd',
@@ -32,7 +32,7 @@ describe('dashboard file boundary', () => {
     const dir = tmpDir(),
       outside = tmpDir();
     fs.writeFileSync(path.join(outside, 'a.json'), '{}');
-    fs.symlinkSync(outside, path.join(dir, 'artifacts'));
+    if (!trySymlink(outside, path.join(dir, 'artifacts'), 'dir')) return;
     expect(() => safeFile(dir, 'artifacts/a.json')).toThrow();
   });
 });
@@ -102,7 +102,8 @@ describe('dashboard API', () => {
     expect(fs.readFileSync(file + '.bak', 'utf8')).toBe(previous);
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).project).toBe('second');
     expect(fs.readdirSync(dir).some((n) => n.endsWith('.tmp'))).toBe(false);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    // POSIX permission bits do not exist on Windows (stat always reports 0o666 there).
+    if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
   it('rejects non-JSON and oversized requests', async () => {
     expect((await put({}, { 'Content-Type': 'text/plain' })).status).toBe(415);
@@ -112,7 +113,7 @@ describe('dashboard API', () => {
     fs.mkdirSync(path.join(dir, 'artifacts'));
     const outside = tmpDir();
     fs.writeFileSync(path.join(outside, 'secret.json'), 'secret');
-    fs.symlinkSync(path.join(outside, 'secret.json'), path.join(dir, 'artifacts/link.json'));
+    trySymlink(path.join(outside, 'secret.json'), path.join(dir, 'artifacts/link.json'));
     for (const route of [
       '/files/keys/session.key',
       '/files/sessions/x.state',

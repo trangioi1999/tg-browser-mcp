@@ -8,6 +8,20 @@ export function tmpDir(prefix = 'tgb-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+/**
+ * Creates a symlink for boundary tests. Directories use junctions on Windows (no privilege needed); file links
+ * return false where Windows refuses them without Developer Mode, so callers skip only that assertion.
+ */
+export function trySymlink(target: string, link: string, type: 'file' | 'dir' = 'file'): boolean {
+  try {
+    fs.symlinkSync(target, link, process.platform === 'win32' && type === 'dir' ? 'junction' : type);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EPERM') return false;
+    throw e;
+  }
+}
+
 export function testHarness(overrides: TgConfigInput = {}): BrowserHarness {
   const dataDir = tmpDir();
   return new BrowserHarness({
