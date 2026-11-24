@@ -1,0 +1,55 @@
+{
+  "project": "banking-bpa",
+  "dataDir": "~/.tg-browser",
+  "logLevel": "info",
+  "browser": {
+    "engine": "chromium",
+    "channel": "chrome",
+    "headless": false,
+    "executablePath": null,
+    "persistent": false,
+    "userDataDir": "~/.tg-browser/profiles/default",
+    "timeout": 30000,
+    "navigationTimeout": 30000,
+    "viewport": { "width": 1280, "height": 800 },
+    "cdpEndpoint": null,
+    "allowRemoteCdp": false
+  },
+  "network": {
+    "mode": "system",
+    "proxy": {
+      "enabled": false,
+      "server": "http://proxy.company.local:3128",
+      "usernameEnv": "TG_PROXY_USERNAME",
+      "passwordEnv": "TG_PROXY_PASSWORD",
+      "bypass": ["localhost", "127.0.0.1", "*.company.local"]
+    },
+    "tls": { "verify": true, "caFile": null },
+    "capture": { "maxRequests": 500, "maxConsole": 300, "captureBodies": false, "maxBodyBytes": 16384 }
+  },
+  "security": {
+    "allowedDomains": [],
+    "blockedDomains": [],
+    "allowLocalhost": true,
+    "allowPrivateNetwork": false,
+    "allowFileUrls": false,
+    "enforceOnSubresources": true,
+    "fileAccess": { "allowedRoots": [] },
+    "approval": { "highRisk": "ask", "destructive": "ask" },
+    "sensitiveFields": ["nationalId", "accountNumber"],
+    "maxSessions": 10,
+    "maxPagesPerSession": 20
+  },
+  "tools": { "profile": "developer", "enabled": [], "disabled": ["browser_upload_file"] },
+  "snapshot": { "maxChars": 12000, "maxDepth": 40, "maxTextLength": 80, "includeText": true },
+  "output": { "screenshots": "inline", "verbose": false },
+  "sessions": { "expirationHours": 168, "encrypt": true },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8931,
+    "tokenEnv": "TG_BROWSER_TOKEN",
+    "allowedOrigins": [],
+    "rateLimitPerMinute": 600,
+    "maxSessions": 5
+  }
+}

@@ -1,0 +1,12 @@
+TG Browser MCP
+Copyright 2026 TG Browser MCP contributors
+
+Licensed under the Apache License, Version 2.0.
+
+This product depends on:
+- Playwright (https://github.com/microsoft/playwright) — Apache License 2.0
+- Model Context Protocol TypeScript SDK (https://github.com/modelcontextprotocol/typescript-sdk) — MIT
+- Zod — MIT; Pino — MIT
+
+The architecture of microsoft/playwright-mcp (Apache-2.0) was studied as a reference. No source code
+from it is included; @playwright/mcp is used only as a development dependency for benchmarking.

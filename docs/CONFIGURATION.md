@@ -1,0 +1,42 @@
+# Configuration
+
+Sources (lowest → highest precedence): built-in defaults < config file (`--config`, else `./tg-browser.config.json` or `./.tg-browser.json`) < environment (`TG_BROWSER_*`) < CLI flags. Invalid configs fail fast with `CONFIG_INVALID` and the offending path. Full example: [`tg-browser.config.example.json`](../tg-browser.config.example.json).
+
+## Environment variables
+
+| Variable                                             | Effect                                                                     |
+| ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| `TG_BROWSER`                                         | browser shortcut (chrome, edge, chromium, firefox, webkit)                 |
+| `TG_BROWSER_HEADLESS`                                | `true`/`1`                                                                 |
+| `TG_BROWSER_EXECUTABLE`                              | browser executable path                                                    |
+| `TG_BROWSER_CDP_ENDPOINT`                            | default CDP endpoint                                                       |
+| `TG_BROWSER_PROFILE`                                 | tool profile                                                               |
+| `TG_BROWSER_PROJECT`                                 | project namespace                                                          |
+| `TG_BROWSER_DATA_DIR`                                | data directory                                                             |
+| `TG_LOG_LEVEL`                                       | log level (stderr)                                                         |
+| `TG_BROWSER_SESSION_KEY`                             | 64 hex chars: session-state encryption key (instead of the local key file) |
+| `TG_BROWSER_TOKEN` (name configurable)               | bearer token for HTTP transport                                            |
+| `TG_SECRET_<NAME>`                                   | values for `${secret.NAME}` in workflows                                   |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | used in `network.mode=system`                                              |
+
+## Sections
+
+| Key                                                                | Default                                       | Notes                                                                              |
+| ------------------------------------------------------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `project`                                                          | `default`                                     | Namespace for sessions, workflows, runs                                            |
+| `dataDir`                                                          | `~/.tg-browser`                               | Created with mode 0700                                                             |
+| `browser.engine` / `channel`                                       | `chromium` / `chrome`                         | `channel: null` = Playwright Chromium; `msedge`, `chrome-beta`…                    |
+| `browser.headless`                                                 | `false`                                       |                                                                                    |
+| `browser.persistent`, `userDataDir`                                | `false`, `~/.tg-browser/profiles/default`     | Dedicated automation profile for the default session — never your personal profile |
+| `browser.timeout` / `navigationTimeout`                            | 30000                                         | ms                                                                                 |
+| `browser.args`                                                     | `[]`                                          | Security-weakening flags are rejected                                              |
+| `browser.cdpEndpoint`, `allowRemoteCdp`                            | `null`, `false`                               |                                                                                    |
+| `network.*`                                                        | see [PROXY.md](PROXY.md)                      | `tls.verify` must stay `true`                                                      |
+| `network.capture`                                                  | 500 requests, 300 console, bodies off         | Ring buffers per session                                                           |
+| `security.*`                                                       | see [SECURITY.md](SECURITY.md)                |                                                                                    |
+| `tools.profile` / `enabled` / `disabled`                           | `developer`                                   | Only enabled tools are advertised                                                  |
+| `snapshot.maxChars` / `maxDepth` / `maxTextLength` / `includeText` | 12000 / 40 / 80 / true                        | Response budgets                                                                   |
+| `output.screenshots`                                               | `inline`                                      | `inline` (MCP image), `file` (path only), `both`                                   |
+| `output.verbose`                                                   | `false`                                       | JSON ActionResult instead of compact text                                          |
+| `sessions.expirationHours`, `encrypt`                              | 168, true                                     |                                                                                    |
+| `http.*`                                                           | 127.0.0.1:8931, token from `TG_BROWSER_TOKEN` | Optional transport                                                                 |

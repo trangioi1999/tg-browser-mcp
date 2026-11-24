@@ -1,0 +1,48 @@
+{
+  "project": "cloud",
+  "dataDir": "/home/tg/.tg-browser",
+  "logLevel": "info",
+  "browser": {
+    "engine": "chromium",
+    "channel": null,
+    "headless": true,
+    "persistent": false,
+    "chromiumSandbox": true,
+    "timeout": 30000,
+    "navigationTimeout": 45000
+  },
+  "security": {
+    "allowLocalhost": false,
+    "allowPrivateNetwork": false,
+    "allowFileUrls": false,
+    "enforceOnSubresources": true,
+    "blockedDomains": [],
+    "allowedDomains": [],
+    "fileAccess": {
+      "allowedRoots": ["/home/tg/.tg-browser"]
+    },
+    "approval": {
+      "highRisk": "deny",
+      "destructive": "ask"
+    },
+    "maxSessions": 6,
+    "maxPagesPerSession": 10
+  },
+  "tools": {
+    "profile": "testing",
+    "disabled": ["browser_upload_file", "browser_connect", "browser_trace_start", "browser_trace_stop"]
+  },
+  "output": {
+    "screenshots": "inline"
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8931,
+    "tokenEnv": "TG_BROWSER_TOKEN",
+    "trustedClientIpHeader": "x-tg-client-ip",
+    "rateLimitPerMinute": 600,
+    "maxSessions": 3,
+    "idleTimeoutMinutes": 10,
+    "evictIdleAfterSeconds": 120
+  }
+}

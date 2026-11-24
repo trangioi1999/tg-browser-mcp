@@ -1,0 +1,157 @@
+{
+  "name": "Maker Checker Workflow",
+  "description": "Maker creates and submits a request; checker finds and approves it; maker verifies the final status.",
+  "variables": { "BASE_URL": "http://127.0.0.1:4321", "CUSTOMER": "Test Customer" },
+  "sessions": { "maker": {}, "checker": {} },
+  "steps": [
+    {
+      "id": "maker-login",
+      "session": "maker",
+      "action": "navigate",
+      "input": { "url": "${BASE_URL}/login" }
+    },
+    {
+      "id": "maker-credentials",
+      "session": "maker",
+      "action": "fill_form",
+      "input": {
+        "fields": [
+          { "label": "Username", "value": "maker" },
+          { "label": "Password", "value": "${secret.MAKER_PASSWORD}" }
+        ]
+      }
+    },
+    {
+      "id": "maker-sign-in",
+      "session": "maker",
+      "action": "click",
+      "input": { "role": "button", "name": "Sign in" }
+    },
+    {
+      "id": "maker-on-form",
+      "session": "maker",
+      "action": "assert",
+      "assert": { "type": "url", "contains": "/request/create" }
+    },
+    {
+      "id": "fill-request",
+      "session": "maker",
+      "action": "fill_form",
+      "input": {
+        "fields": [
+          { "label": "Customer Name", "value": "${CUSTOMER}" },
+          { "label": "Request Type", "value": "Loan" },
+          { "role": "combobox", "name": "Priority", "value": "High" },
+          { "label": "Description", "value": "Automated maker-checker test" }
+        ]
+      }
+    },
+    {
+      "id": "submit",
+      "session": "maker",
+      "action": "click",
+      "input": { "role": "button", "name": "Submit" }
+    },
+    {
+      "id": "submitted",
+      "session": "maker",
+      "action": "assert",
+      "assert": { "type": "text", "target": { "role": "status" }, "equals": "Pending Approval" }
+    },
+    {
+      "id": "capture-id",
+      "session": "maker",
+      "action": "extract",
+      "extract": {
+        "variable": "REQUEST_ID",
+        "from": "text",
+        "target": { "testId": "request-id" },
+        "pattern": "(REQ-\\d+)"
+      }
+    },
+
+    {
+      "id": "checker-login",
+      "session": "checker",
+      "action": "navigate",
+      "input": { "url": "${BASE_URL}/login" }
+    },
+    {
+      "id": "checker-credentials",
+      "session": "checker",
+      "action": "fill_form",
+      "input": {
+        "fields": [
+          { "label": "Username", "value": "checker" },
+          { "label": "Password", "value": "${secret.CHECKER_PASSWORD}" }
+        ]
+      }
+    },
+    {
+      "id": "checker-sign-in",
+      "session": "checker",
+      "action": "click",
+      "input": { "role": "button", "name": "Sign in" }
+    },
+    {
+      "id": "search",
+      "session": "checker",
+      "action": "fill",
+      "input": { "label": "Search requests", "value": "${REQUEST_ID}", "submit": true },
+      "dependsOn": ["capture-id"]
+    },
+    {
+      "id": "found",
+      "session": "checker",
+      "action": "assert",
+      "assert": {
+        "type": "text",
+        "target": { "testId": "status-${REQUEST_ID}" },
+        "equals": "Pending Approval"
+      }
+    },
+    {
+      "id": "approve",
+      "session": "checker",
+      "action": "click",
+      "input": { "role": "button", "name": "Approve ${REQUEST_ID}" }
+    },
+    {
+      "id": "note",
+      "session": "checker",
+      "action": "fill",
+      "input": { "label": "Approval note", "value": "Looks good" }
+    },
+    {
+      "id": "confirm",
+      "session": "checker",
+      "action": "click",
+      "input": { "role": "button", "name": "Confirm approval" }
+    },
+    {
+      "id": "approved",
+      "session": "checker",
+      "action": "assert",
+      "assert": { "type": "text", "target": { "testId": "status-${REQUEST_ID}" }, "equals": "Approved" }
+    },
+
+    {
+      "id": "maker-verify",
+      "session": "maker",
+      "action": "navigate",
+      "input": { "url": "${BASE_URL}/request/${REQUEST_ID}" }
+    },
+    {
+      "id": "final-status",
+      "session": "maker",
+      "action": "assert",
+      "assert": { "type": "text", "target": { "testId": "request-status" }, "equals": "Approved" }
+    },
+    {
+      "id": "no-js-errors",
+      "session": "maker",
+      "action": "assert",
+      "assert": { "type": "no_console_errors" }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tg-browser-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-20",
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "TgBrowserContainer",
+      "image": "../../Dockerfile",
+      "image_build_context": "../..",
+      // 1/2 vCPU, 4 GiB RAM, 8 GB disk. Use standard-2 for more concurrent sessions.
+      "instance_type": "standard-1",
+      "max_instances": 1,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "TG_BROWSER", "class_name": "TgBrowserContainer" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TgBrowserContainer"] }],
+  // Per-client-IP limit at the edge, applied before authentication.
+  "ratelimits": [
+    { "name": "RATE_LIMITER", "namespace_id": "8931", "simple": { "limit": 300, "period": 60 } },
+  ],
+}

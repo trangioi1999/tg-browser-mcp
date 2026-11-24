@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tg-browser": {
+      "command": "node",
+      "args": ["./dist/index.js", "--transport", "stdio", "--profile", "developer"]
+    }
+  }
+}
