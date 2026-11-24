@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { SessionJournal } from '../journal/session-journal.js';
 import type { TgConfig, TgConfigInput } from '../config/schema.js';
 import { isParsedConfig, parseConfig } from '../config/load-config.js';
 import { BrowserManager } from '../browser/browser-manager.js';
@@ -27,6 +28,7 @@ import type { Session } from '../session/session.js';
  *   await s.click({ role: 'button', name: 'Create' });
  */
 export class BrowserHarness {
+  readonly journal: SessionJournal;
   readonly config: TgConfig;
   readonly events = new TypedEmitter();
   readonly policy: DomainPolicy;
@@ -46,6 +48,7 @@ export class BrowserHarness {
     fs.mkdirSync(this.config.dataDir, { recursive: true, mode: 0o700 });
     this.policy = new DomainPolicy(this.config.security);
     this.redactor = new DataRedactor(this.config.security.sensitiveFields);
+    this.journal = new SessionJournal(this.config, this.redactor, this.events);
     this.permissions = new PermissionManager(this.config);
     this.audit = new AuditLogger(this.config.dataDir);
     this.proxy = new ProxyManager(this.config.network);

@@ -37,6 +37,7 @@ export interface RunRecord {
   finishedAt?: string;
   durationMs?: number;
   steps: StepResult[];
+  reports?: string[];
   variables: Record<string, string>;
   failure?: {
     stepId: string;
@@ -136,6 +137,15 @@ export class WorkflowEngine {
     }
   }
 
+  /** Associate reports with their runs so local clients can discover them without scanning content. */
+  recordReports(runIds: string[], paths: string[]): void {
+    for (const runId of runIds) {
+      const run = this.getRun(runId);
+      run.reports = [...new Set([...(run.reports ?? []), ...paths])];
+      this.checkpoint(run);
+    }
+  }
+
   getRun(runId: string): RunRecord {
     const live = this.runs.get(runId);
     if (live) return live.record;
@@ -218,10 +228,19 @@ export class WorkflowEngine {
     const vars: Record<string, string> = {};
     for (const [k, v] of Object.entries({ ...wf.variables, ...(opts.variables ?? {}) })) vars[k] = String(v);
     const secretValues = new Set<string>();
-    this.h.events.emit('workflow.started', { runId: record.runId, workflow: wf.name });
+    const sessions = () =>
+      [...new Set(wf.steps.map((s) => s.session))].flatMap((name) => {
+        const s = this.h.sessions.find(name);
+        return s ? [{ sessionId: s.id, name: s.name, project: s.project }] : [];
+      });
     let started = !opts.startAt;
     try {
       await this.ensureSessions(wf);
+      this.h.events.emit('workflow.started', {
+        runId: record.runId,
+        workflow: wf.name,
+        sessions: sessions(),
+      });
       for (const [i, step] of wf.steps.entries()) {
         const sr = record.steps[i]!;
         if (signal.aborted) throw signal.reason;
@@ -311,12 +330,14 @@ export class WorkflowEngine {
     if (record.status === 'passed')
       this.h.events.emit('workflow.completed', {
         runId: record.runId,
+        sessions: sessions(),
         workflow: wf.name,
         durationMs: record.durationMs,
       });
     else
       this.h.events.emit('workflow.failed', {
         runId: record.runId,
+        sessions: sessions(),
         workflow: wf.name,
         ...(record.failure?.stepId ? { stepId: record.failure.stepId } : {}),
         code: record.failure?.code ?? 'WORKFLOW_FAILED',
@@ -486,6 +507,9 @@ export class WorkflowEngine {
 function slug(name: string): string {
   return (
     name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // strip accents: "Đăng nhập" -> "dang-nhap", not "ng-nh-p"
+      .replace(/[đĐ]/g, 'd')
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, '-')
       .replace(/^-+|-+$/g, '')

@@ -201,7 +201,7 @@ export const workflowTools = [
 function writeArtifact(c: ToolContext, p: string | undefined, defaultName: string, content: string): string {
   const file = p
     ? c.harness.permissions.checkFilePath(p, 'write')
-    : path.join(c.config.dataDir, 'artifacts', 'reports', defaultName);
+    : path.join(c.config.dataDir, 'artifacts', c.config.project, 'reports', defaultName);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
   return file;
@@ -287,6 +287,10 @@ export const testingTools = [
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const md = writeArtifact(c, undefined, `report-${stamp}.md`, markdownReport(runs));
       const xml = writeArtifact(c, undefined, `report-${stamp}.xml`, junitReport(runs));
+      c.workflows.recordReports(
+        runs.map((r) => r.runId),
+        [md, xml],
+      );
       return {
         content: [
           {
@@ -322,7 +326,11 @@ export const testingTools = [
           : a.format === 'json'
             ? JSON.stringify(runs, null, 2)
             : markdownReport(runs);
-      if (a.path) return text(`✓ Wrote ${writeArtifact(c, a.path, '', content)}`);
+      if (a.path) {
+        const file = writeArtifact(c, a.path, '', content);
+        c.workflows.recordReports(ids, [file]);
+        return text(`✓ Wrote ${file}`);
+      }
       return text(content);
     },
   }),

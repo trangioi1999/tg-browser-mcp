@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import type { BrowserContext, BrowserContextOptions, Page } from 'playwright';
 import type { TgConfig } from '../config/schema.js';
 import type { BrowserManager } from '../browser/browser-manager.js';
@@ -18,6 +19,7 @@ import type { SessionStore } from './session-store.js';
 
 export interface CreateSessionOptions {
   name: string;
+  recordVideo?: boolean;
   project?: string;
   agentId?: string;
   /** Use a dedicated on-disk automation profile for this session. */
@@ -39,6 +41,10 @@ const BLOCKED_PAGE = (reason: string) =>
 
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
+  private readonly recordings = new Map<
+    string,
+    { retain: boolean; failed: boolean; videos: Array<{ pageId: string; video: import('playwright').Video }> }
+  >();
   private activeKey: string | undefined;
 
   constructor(
@@ -48,7 +54,18 @@ export class SessionManager {
     private readonly redactor: DataRedactor,
     private readonly store: SessionStore,
     private readonly events: TypedEmitter,
-  ) {}
+  ) {
+    events.on('action.failed', ({ sessionId }) => {
+      const r = this.recordings.get(sessionId);
+      if (r) r.failed = true;
+    });
+    events.on('workflow.failed', ({ sessions }) => {
+      for (const s of sessions ?? []) {
+        const r = this.recordings.get(s.sessionId);
+        if (r) r.failed = true;
+      }
+    });
+  }
 
   private key(project: string, name: string): string {
     return `${project}/${name}`;
@@ -113,6 +130,19 @@ export class SessionManager {
       serviceWorkers: this.cfg.security.enforceOnSubresources ? 'block' : 'allow',
       bypassCSP: false,
     };
+    if (opts.recordVideo ?? this.cfg.recording.video !== 'off') {
+      o.recordVideo = {
+        dir: path.join(
+          this.cfg.dataDir,
+          'artifacts',
+          assertSafeName('project', opts.project ?? this.cfg.project),
+          assertSafeName('session', opts.name),
+          'videos',
+        ),
+        ...(this.cfg.recording.size ? { size: this.cfg.recording.size } : {}),
+      };
+    }
+    if (o.recordVideo?.dir) fs.mkdirSync(o.recordVideo.dir, { recursive: true, mode: 0o700 });
     if (opts.locale) o.locale = opts.locale;
     if (opts.timezoneId) o.timezoneId = opts.timezoneId;
     if (opts.proxy?.enabled) {
@@ -184,6 +214,7 @@ export class SessionManager {
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       openPage: opts.openPage ?? true,
       restored,
+      retainVideo: opts.recordVideo === undefined && this.cfg.recording.video === 'retain-on-failure',
       indicator: this.cfg.browser.indicator ?? !this.browsers.defaultSpec(opts.browser).headless,
     });
   }
@@ -217,13 +248,35 @@ export class SessionManager {
       openPage: boolean;
       restored?: { cookies: number; origins: number } | undefined;
       indicator: boolean;
+      retainVideo?: boolean;
     },
   ): Promise<Session> {
     context.setDefaultTimeout(this.cfg.browser.timeout);
     context.setDefaultNavigationTimeout(this.cfg.browser.navigationTimeout);
     const holder: { session?: Session } = {};
-    const monitor = new NetworkMonitor(this.cfg.network.capture, this.redactor, (p) =>
-      holder.session?.pageIdOf(p),
+    const monitor = new NetworkMonitor(
+      this.cfg.network.capture,
+      this.redactor,
+      (p) => holder.session?.pageIdOf(p),
+      (type, entry) => {
+        if (!holder.session) return;
+        if (type === 'console.error')
+          this.events.emit(type, {
+            sessionId: holder.session.id,
+            pageId: entry.pageId as string | undefined,
+            text: String(entry.text),
+            count: 1,
+          });
+        else
+          this.events.emit(type, {
+            sessionId: holder.session.id,
+            pageId: entry.pageId as string | undefined,
+            method: String(entry.method),
+            url: String(entry.url),
+            status: entry.status as number | null,
+            failureCode: entry.failureCode as string | null,
+          });
+      },
     );
     const session = new Session(
       shortId('session'),
@@ -237,6 +290,7 @@ export class SessionManager {
       o.agentId,
     );
     holder.session = session;
+    this.recordings.set(session.id, { retain: !!o.retainVideo, failed: false, videos: [] });
     monitor.attachContext(context);
     await this.installPolicy(context, monitor);
     if (o.indicator) {
@@ -253,6 +307,8 @@ export class SessionManager {
       this.registerPage(session, p, !own);
     });
     context.on('close', () => {
+      void this.finalizeVideos(session);
+      this.events.emit('session.closed', { sessionId: session.id, name: session.name });
       session.status = 'closed';
       this.sessions.delete(this.key(session.project, session.name));
       if (this.activeKey === this.key(session.project, session.name)) this.activeKey = undefined;
@@ -303,11 +359,19 @@ export class SessionManager {
     }
     const st = new PageState(session.nextPageId(), page);
     session.pages.set(st.id, st);
+    const video = page.video();
+    if (video) this.recordings.get(session.id)?.videos.push({ pageId: st.id, video });
     session.monitor.attachPage(page);
     if (!session.activePageId || !opener) session.activePageId = st.id;
     if (opener) session.newPagesQueue.push(st.id);
 
     page.on('dialog', (d) => {
+      this.events.emit('dialog.opened', {
+        sessionId: session.id,
+        pageId: st.id,
+        type: d.type(),
+        message: this.redactor.text(d.message()),
+      });
       // beforeunload dialogs are accepted so navigations/closes are not blocked.
       if (d.type() === 'beforeunload') return void d.accept().catch(() => undefined);
       st.pendingDialog = {
@@ -345,6 +409,8 @@ export class SessionManager {
       });
     });
     page.on('close', () => {
+      const recording = this.recordings.get(session.id);
+      if (video && recording && !recording.retain) void this.saveVideo(session, st.id, video);
       session.pages.delete(st.id);
       if (session.activePageId === st.id) session.activePageId = [...session.pages.keys()].pop();
     });
@@ -456,10 +522,51 @@ export class SessionManager {
     } else {
       await s.context.close().catch(() => undefined);
     }
-    this.events.emit('session.closed', { sessionId: s.id, name: s.name });
+    await this.finalizeVideos(s);
+  }
+
+  private readonly savedVideos = new WeakMap<import('playwright').Video, Promise<void>>();
+  private saveVideo(s: Session, pageId: string, video: import('playwright').Video): Promise<void> {
+    const existing = this.savedVideos.get(video);
+    if (existing) return existing;
+    const work = (async () => {
+      try {
+        const file = await video.path();
+        // saveAs waits for the recording to finish, including pages closed before their context.
+        await video.saveAs(file);
+        fs.chmodSync(file, 0o600);
+        this.events.emit('video.saved', {
+          sessionId: s.id,
+          pageId,
+          path: file,
+          bytes: fs.statSync(file).size,
+        });
+      } catch {
+        /* Recording failures must not break automation. */
+      }
+    })();
+    this.savedVideos.set(video, work);
+    return work;
+  }
+
+  private readonly finalizing = new Map<string, Promise<void>>();
+  private finalizeVideos(s: Session): Promise<void> {
+    const previous = this.finalizing.get(s.id);
+    if (previous) return previous;
+    const work = (async () => {
+      const recording = this.recordings.get(s.id);
+      for (const { pageId, video } of recording?.videos ?? []) {
+        if (recording?.retain && !recording.failed) await video.delete().catch(() => undefined);
+        else await this.saveVideo(s, pageId, video);
+      }
+      this.recordings.delete(s.id);
+    })();
+    this.finalizing.set(s.id, work);
+    return work;
   }
 
   async closeAll(): Promise<void> {
     for (const s of [...this.sessions.values()]) await this.close(s.name, s.project).catch(() => undefined);
+    await Promise.all(this.finalizing.values());
   }
 }

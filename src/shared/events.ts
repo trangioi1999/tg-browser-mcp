@@ -2,6 +2,18 @@ import { EventEmitter } from 'node:events';
 
 /** Typed lifecycle events, intended for external observers such as TG Studio. */
 export interface HarnessEventMap {
+  'trace.created': { sessionId: string; pageId?: string; path: string; bytes: number };
+  'video.saved': { sessionId: string; pageId: string; path: string; bytes: number };
+  'console.error': { sessionId: string; pageId?: string | undefined; text: string; count: number };
+  'network.failed': {
+    sessionId: string;
+    pageId?: string | undefined;
+    method: string;
+    url: string;
+    status: number | null;
+    failureCode: string | null;
+  };
+  'dialog.opened': { sessionId: string; pageId: string; message: string; type: string };
   'browser.started': { browserId: string; engine: string; channel?: string; mode: 'launch' | 'connect' };
   'browser.closed': { browserId: string; reason: 'requested' | 'disconnected' | 'shutdown' };
   'session.created': { sessionId: string; name: string; project: string };
@@ -37,10 +49,26 @@ export interface HarnessEventMap {
     message: string;
     correlationId: string;
   };
-  'workflow.started': { runId: string; workflow: string };
+  'workflow.started': {
+    sessions?: Array<{ sessionId: string; name: string; project: string }>;
+    runId: string;
+    workflow: string;
+  };
   'workflow.step': { runId: string; stepId: string; status: 'passed' | 'failed' | 'skipped' };
-  'workflow.completed': { runId: string; workflow: string; durationMs: number };
-  'workflow.failed': { runId: string; workflow: string; stepId?: string; code: string; message: string };
+  'workflow.completed': {
+    sessions?: Array<{ sessionId: string; name: string; project: string }>;
+    runId: string;
+    workflow: string;
+    durationMs: number;
+  };
+  'workflow.failed': {
+    sessions?: Array<{ sessionId: string; name: string; project: string }>;
+    runId: string;
+    workflow: string;
+    stepId?: string;
+    code: string;
+    message: string;
+  };
   'screenshot.created': { sessionId: string; pageId: string; path: string; bytes: number };
 }
 

@@ -1089,6 +1089,7 @@ export class ActionExecutor {
       : path.join(this.artifactsDir, s.project, s.name, `trace-${Date.now()}.zip`);
     fs.mkdirSync(path.dirname(out), { recursive: true });
     await s.context.tracing.stop({ path: out });
+    this.events.emit('trace.created', { sessionId: s.id, path: out, bytes: fs.statSync(out).size });
     return { path: out, bytes: fs.statSync(out).size };
   }
 }

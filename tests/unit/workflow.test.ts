@@ -141,3 +141,22 @@ describe('test generation', () => {
     expect(out.diagnostics ?? []).toEqual([]);
   });
 });
+
+describe('workflow file names', () => {
+  it('keeps Vietnamese names readable', async () => {
+    const { BrowserHarness } = await import('../../src/harness/browser-harness.js');
+    const { WorkflowEngine } = await import('../../src/workflow/workflow-engine.js');
+    const { WorkflowSchema } = await import('../../src/workflow/workflow-schema.js');
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tgb-slug-'));
+    const engine = new WorkflowEngine(new BrowserHarness({ dataDir, logLevel: 'silent' }));
+    const wf = WorkflowSchema.parse({
+      name: 'Đăng nhập và tạo yêu cầu',
+      steps: [{ id: 'a', action: 'navigate', input: { url: 'http://127.0.0.1/' } }],
+    });
+    expect(path.basename(engine.saveDefinition(wf))).toBe('dang-nhap-va-tao-yeu-cau.json');
+    expect(engine.loadDefinition('Đăng nhập và tạo yêu cầu').name).toBe(wf.name);
+  });
+});

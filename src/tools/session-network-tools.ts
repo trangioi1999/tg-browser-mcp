@@ -18,12 +18,14 @@ export const sessionTools = [
       project: z.string().optional(),
       restore: z.boolean().optional().describe('Restore saved state from session_save'),
       persistent: z.boolean().optional(),
+      recordVideo: z.boolean().optional().describe('Override video recording for this session'),
       browser: z.enum(['chrome', 'edge', 'msedge', 'chromium', 'firefox', 'webkit']).optional(),
       url: z.string().optional().describe('Navigate after creating'),
     },
     handler: async (a, { harness }) => {
       const s = await harness.sessions.create({
         name: a.name,
+        ...(a.recordVideo !== undefined ? { recordVideo: a.recordVideo } : {}),
         ...(a.project ? { project: a.project } : {}),
         ...(a.restore ? { restore: true } : {}),
         ...(a.persistent !== undefined ? { persistent: a.persistent } : {}),
