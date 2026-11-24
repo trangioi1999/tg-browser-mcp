@@ -35,8 +35,11 @@ describe('session journal', () => {
     expect(text).not.toMatch(/secret|private|abc123|hidden|never-store|user:pass/);
     expect(text).toContain('REDACTED');
     expect(text.trim().split('\n')).toHaveLength(3);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
+    // POSIX permission bits do not exist on Windows (stat always reports 0o666 there).
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
+    }
   });
   it('redacts structured console secrets and known environment secret values', () => {
     const dataDir = tmpDir(),

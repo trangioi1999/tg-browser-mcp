@@ -9,7 +9,7 @@ import { PermissionManager } from '../../src/security/permission-manager.js';
 import { ProxyManager } from '../../src/network/proxy-manager.js';
 import { SessionStore } from '../../src/session/session-store.js';
 import { TgError, toTgError, classifyNetworkError } from '../../src/shared/errors.js';
-import { tmpDir } from '../helpers.js';
+import { tmpDir, trySymlink } from '../helpers.js';
 
 describe('tool registry', () => {
   it('has unique, well-formed tools with valid schemas', () => {
@@ -85,12 +85,12 @@ describe('permission manager', () => {
     );
   });
   it('blocks symlink escapes', () => {
+    // A real directory outside the root: /etc does not exist on Windows, which made the path check fail
+    // with "File not found" before the boundary check could run.
+    const outside = tmpDir('tgb-outside-');
+    fs.writeFileSync(path.join(outside, 'hosts'), 'x');
     const link = path.join(root, 'link');
-    try {
-      fs.symlinkSync('/etc', link);
-    } catch {
-      return;
-    }
+    if (!trySymlink(outside, link, 'dir')) return;
     expect(() => pm.checkFilePath(path.join(link, 'hosts'), 'read')).toThrow(/outside allowed roots/);
   });
   it('enforces approval modes', async () => {

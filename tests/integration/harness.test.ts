@@ -81,6 +81,8 @@ describe('browser harness (real browser)', () => {
       code: 'ELEMENT_NOT_FOUND',
       context: { available: ['Low', 'Normal', 'High'] },
     });
+    // A failed pick must not leave the popup open over the controls below (it covered "Urgent" on Windows).
+    expect(await s.raw.page().page.locator('#prio-list').isVisible()).toBe(false);
     r = await s.check({ label: 'Urgent' });
     expect(r.pageState).toContain('+checked');
     await s.fill({ label: 'Customer Name' }, 'ACME Corp');
