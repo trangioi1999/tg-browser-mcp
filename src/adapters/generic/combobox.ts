@@ -32,6 +32,13 @@ export async function selectCustomOption(
       : frame.getByRole('option');
     return base.filter({ visible: true });
   };
+  // Escape closes compliant popups; many hand-written widgets ignore it, so toggle the combobox as a fallback.
+  // A popup left open covers the controls below it and breaks the agent's next action.
+  const closePopup = async (): Promise<void> => {
+    await ps.page.keyboard.press('Escape').catch(() => undefined);
+    if (!r.desc.editable && (await anyOptionVisible(scope())))
+      await el.click({ timeout: Math.min(timeout, 2000) }).catch(() => undefined);
+  };
   for (const [i, value] of values.entries()) {
     if (r.desc.editable) {
       await el.fill(value, { timeout });
@@ -52,7 +59,7 @@ export async function selectCustomOption(
       const available = await scope()
         .allInnerTexts()
         .catch(() => [] as string[]);
-      await ps.page.keyboard.press('Escape').catch(() => undefined);
+      await closePopup();
       throw new TgError('ELEMENT_NOT_FOUND', `Option "${value}" not found`, {
         context: {
           available: available
@@ -67,8 +74,7 @@ export async function selectCustomOption(
     chosen.push(value);
   }
   // Multi-selects keep the overlay open; close it so the page state is clean.
-  if (values.length > 1 && (await anyOptionVisible(scope())))
-    await ps.page.keyboard.press('Escape').catch(() => undefined);
+  if (values.length > 1 && (await anyOptionVisible(scope()))) await closePopup();
   return chosen;
 }
 
