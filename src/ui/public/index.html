@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Bảng điều khiển cục bộ của TG Browser MCP: sessions, ảnh chụp, video, trace, workflow và cấu hình."
+    />
+    <title>TG Browser · Bảng điều khiển</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Bỏ qua tới nội dung</a>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="wordmark">
+          <span class="wordmark-mark" aria-hidden="true"></span>
+          <h1>TG Browser</h1>
+          <p>Bảng điều khiển cục bộ</p>
+        </div>
+        <nav aria-label="Điều hướng chính">
+          <a href="#overview">Tổng quan</a><a href="#sessions">Sessions</a><a href="#workflows">Workflows</a
+          ><a href="#settings">Cài đặt</a>
+        </nav>
+        <button id="theme-toggle" type="button" aria-pressed="false">Giao diện tối</button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1"></main>
+    <p id="notice" role="status" aria-live="polite"></p>
+    <dialog id="lightbox" aria-label="Ảnh chụp">
+      <div class="lightbox-bar">
+        <button id="previous" type="button">Trước</button>
+        <button id="next" type="button">Sau</button>
+        <span id="lightbox-name"></span>
+        <span class="spacer"></span>
+        <button id="close-lightbox" type="button">Đóng</button>
+      </div>
+    </dialog>
+  </body>
+</html>

@@ -4,7 +4,7 @@
   "description": "Secure, token-efficient browser automation MCP server and harness for AI agents (Playwright-based)",
   "main": "dist/sdk.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-ui.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
