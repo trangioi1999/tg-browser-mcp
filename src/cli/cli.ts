@@ -17,6 +17,7 @@ Usage:
   tg-browser-mcp doctor [--url <u>]    Check Node, browsers, config, storage, proxy, TLS, MCP init
   tg-browser-mcp browsers              List detected browsers
   tg-browser-mcp sessions              List saved sessions for the project
+  tg-browser-mcp ui [--port 8940] [--config <file>] [--project <p>] [--open]
   tg-browser-mcp workflows             List saved workflows and recent runs
 
 Options (start):
@@ -57,6 +58,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       'log-level': { type: 'string' },
       url: { type: 'string' },
       force: { type: 'boolean' },
+      open: { type: 'boolean' },
       'no-launch': { type: 'boolean' },
       version: { type: 'boolean', short: 'v' },
       help: { type: 'boolean', short: 'h' },
@@ -114,6 +116,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   if (values.port) config.http.port = Number(values.port);
 
   switch (cmd) {
+    case 'ui': {
+      const { startDashboard } = await import('../ui/server.js');
+      const dashboard = await startDashboard(config, {
+        port: Number(values.port ?? 8940),
+        ...(values.host ? { host: values.host } : {}),
+        ...(file ? { file } : {}),
+        overrides,
+      });
+      console.log(`Bảng điều khiển: ${dashboard.url}`);
+      if (values.open) {
+        const { execFile } = await import('node:child_process');
+        const command =
+          process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'rundll32.exe' : 'xdg-open';
+        const args =
+          process.platform === 'win32' ? ['url.dll,FileProtocolHandler', dashboard.url] : [dashboard.url];
+        execFile(command, args, (error) => {
+          if (error) console.error('Không thể mở trình duyệt; hãy mở URL phía trên.');
+        });
+      }
+      const stop = () => void dashboard.close().then(() => process.exit(0));
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+      return -1;
+    }
     case 'start': {
       const transport = values.transport ?? 'stdio';
       if (transport === 'stdio') {

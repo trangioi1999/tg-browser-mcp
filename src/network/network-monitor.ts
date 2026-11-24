@@ -68,6 +68,10 @@ export class NetworkMonitor {
     private readonly opts: MonitorOptions,
     private readonly redactor: DataRedactor,
     private readonly pageIdOf: (p: Page) => string | undefined,
+    private readonly observe?: (
+      type: 'console.error' | 'network.failed',
+      entry: Record<string, unknown>,
+    ) => void,
   ) {}
 
   attachContext(ctx: BrowserContext): void {
@@ -127,6 +131,7 @@ export class NetworkMonitor {
     const res = await r.response().catch(() => null);
     e.status = res?.status() ?? null;
     e.ok = res ? res.ok() : null;
+    if (e.status !== null && e.status >= 400) this.notifyNetwork(e);
     const timing = r.timing();
     e.durationMs = timing.responseEnd > 0 ? Math.round(timing.responseEnd) : Date.now() - e.startedAt;
     if (this.opts.captureBodies && res && ['xhr', 'fetch', 'document'].includes(e.resourceType)) {
@@ -158,11 +163,23 @@ export class NetworkMonitor {
     e.durationMs = Date.now() - e.startedAt;
     e.blockedByPolicy = this.blockedUrls.has(r.url()) || /BLOCKED_BY_CLIENT/.test(text);
     e.failureCode = e.blockedByPolicy ? 'DOMAIN_NOT_ALLOWED' : (classifyNetworkError(text) ?? null);
+    this.notifyNetwork(e);
+  }
+
+  private notifyNetwork(e: NetworkEntry): void {
+    this.observe?.('network.failed', {
+      pageId: e.pageId,
+      method: e.method,
+      url: e.url,
+      status: e.status,
+      failureCode: e.failureCode,
+    });
   }
 
   private addConsole(page: Page, type: string, rawText: string, location: string | undefined): void {
     const text = this.redactor.text(rawText).slice(0, 2000);
     const pageId = this.pageIdOf(page);
+    if (type === 'error' || type === 'pageerror') this.observe?.('console.error', { pageId, text, count: 1 });
     const key = `${pageId}|${type}|${text}|${location ?? ''}`;
     const now = Date.now();
     const existing = this.consoleIndex.get(key);

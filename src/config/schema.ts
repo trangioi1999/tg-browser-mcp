@@ -159,6 +159,23 @@ export const HttpConfigSchema = z.object({
 });
 
 export const ConfigSchema = z.object({
+  journal: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxBytes: z.number().int().min(1024).max(5_000_000).default(5_000_000),
+    })
+    .default({ enabled: true, maxBytes: 5_000_000 }),
+  recording: z
+    .object({
+      video: z.enum(['off', 'on', 'retain-on-failure']).default('off'),
+      size: z
+        .object({
+          width: z.number().int().positive().max(7680),
+          height: z.number().int().positive().max(4320),
+        })
+        .optional(),
+    })
+    .default({ video: 'off' }),
   project: z.string().default('default'),
   dataDir: z.string().default('~/.tg-browser'),
   logLevel: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),

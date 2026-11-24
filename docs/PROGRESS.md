@@ -10,7 +10,13 @@ Last update: 2026-11-24
 
 ## In progress
 
-- None.
+- Local dashboard implemented: Vietnamese offline UI, authenticated localhost API, configuration editing,
+  per-session journal, recording, workflow/report links and regression tests. See [Dashboard](DASHBOARD.md).
+  Full fixture/browser verification and focused commits remain blocked in the restricted worktree sandbox
+  (localhost listen EPERM, Chrome SIGABRT, Git index.lock EPERM).
+  Validation: lint, typecheck, build and changed-file formatting pass; 69 unit tests pass in 8 files.
+  Final full-suite rerun with shorter sandbox timeouts: 69 passed, 2 failed, 55 skipped (126 tests),
+  10 listener errors; 8 files passed and 9 failed. Browser/fixture integration remains unverified.
 
 ## Pending
 

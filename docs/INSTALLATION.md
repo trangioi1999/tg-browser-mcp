@@ -23,6 +23,9 @@ npm run build
 node dist\index.js doctor
 ```
 
+Full Windows guide (config file location, Claude Desktop/Code/Codex setup, environment variables, proxy/CA,
+dashboard presets, troubleshooting): [WINDOWS.md](WINDOWS.md).
+
 ## Offline / restricted networks
 
 1. On a connected machine (or via your internal registry/mirror): `npm ci` and, if needed, `npx playwright install chromium` (set `PLAYWRIGHT_DOWNLOAD_HOST` to an internal mirror, `NODE_EXTRA_CA_CERTS` for TLS inspection).
