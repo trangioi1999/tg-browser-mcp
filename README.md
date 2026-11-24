@@ -131,8 +131,18 @@ Honest notes: most of the total difference comes from paginating very large page
 
 ## Documentation
 
-[Architecture](docs/ARCHITECTURE.md) · [Installation](docs/INSTALLATION.md) · [Configuration](docs/CONFIGURATION.md) · [CLI](docs/CLI.md) · [Tools](docs/TOOLS.md) · [MCP clients](docs/CLIENTS.md) · [Proxy & enterprise network](docs/PROXY.md) · [Sessions](docs/SESSIONS.md) · [Angular](docs/ANGULAR.md) · [Workflows](docs/WORKFLOWS.md) · [Security model](docs/SECURITY.md) · [Threat model](docs/THREAT_MODEL.md) · [TG Studio](docs/TG_STUDIO.md) · [Benchmark](docs/BENCHMARK.md) · [Deploy to Cloudflare](docs/DEPLOY-CLOUDFLARE.md) · [Roadmap](docs/ROADMAP.md) · [Progress](docs/PROGRESS.md) · [ADRs](docs/adr/) · [Contributing](CONTRIBUTING.md)
+[Architecture](docs/ARCHITECTURE.md) · [Installation](docs/INSTALLATION.md) · [Windows setup](docs/WINDOWS.md) · [Configuration](docs/CONFIGURATION.md) · [CLI](docs/CLI.md) · [Tools](docs/TOOLS.md) · [MCP clients](docs/CLIENTS.md) · [Proxy & enterprise network](docs/PROXY.md) · [Sessions](docs/SESSIONS.md) · [Angular](docs/ANGULAR.md) · [Workflows](docs/WORKFLOWS.md) · [Security model](docs/SECURITY.md) · [Threat model](docs/THREAT_MODEL.md) · [TG Studio](docs/TG_STUDIO.md) · [Benchmark](docs/BENCHMARK.md) · [Deploy to Cloudflare](docs/DEPLOY-CLOUDFLARE.md) · [Roadmap](docs/ROADMAP.md) · [Progress](docs/PROGRESS.md) · [ADRs](docs/adr/) · [Contributing](CONTRIBUTING.md)
 
 ## License
 
 Apache-2.0. Built on Playwright (Apache-2.0) and the MCP TypeScript SDK (MIT). No source code was copied from microsoft/playwright-mcp; its public architecture was used as a reference. See [NOTICE](NOTICE).
+
+## Local management dashboard
+
+Run `tg-browser-mcp ui --open` for an offline Vietnamese dashboard with configuration editing, session
+timelines, screenshots, video, grouped console/network errors, workflow reports and traces. The command
+prints a tokenized localhost URL; settings are validated and backed up before saving. Restart MCP clients
+to apply saved changes. Journaling defaults on; video recording defaults off. Settings start from four
+presets (Basic, Developer, Testing, Full) showing tool count and estimated context tokens; the Workflows page
+lists saved workflows, their steps and run history. See [Dashboard](docs/DASHBOARD.md) for configuration,
+retention and security details, and [Windows setup](docs/WINDOWS.md) for PowerShell paths and client config.

@@ -778,14 +778,15 @@ Create an isolated browser session (own cookies/storage), e.g. one per user role
 
 Category: session · Profile: testing · Risk: interact
 
-| Param        | Type                                                                  | Required | Notes                                 |
-| ------------ | --------------------------------------------------------------------- | -------- | ------------------------------------- |
-| `name`       | string                                                                | yes      |                                       |
-| `project`    | string                                                                |          |                                       |
-| `restore`    | boolean                                                               |          | Restore saved state from session_save |
-| `persistent` | boolean                                                               |          |                                       |
-| `browser`    | `chrome` \| `edge` \| `msedge` \| `chromium` \| `firefox` \| `webkit` |          |                                       |
-| `url`        | string                                                                |          | Navigate after creating               |
+| Param         | Type                                                                  | Required | Notes                                     |
+| ------------- | --------------------------------------------------------------------- | -------- | ----------------------------------------- |
+| `name`        | string                                                                | yes      |                                           |
+| `project`     | string                                                                |          |                                           |
+| `restore`     | boolean                                                               |          | Restore saved state from session_save     |
+| `persistent`  | boolean                                                               |          |                                           |
+| `recordVideo` | boolean                                                               |          | Override video recording for this session |
+| `browser`     | `chrome` \| `edge` \| `msedge` \| `chromium` \| `firefox` \| `webkit` |          |                                           |
+| `url`         | string                                                                |          | Navigate after creating                   |
 
 ### session_list
 

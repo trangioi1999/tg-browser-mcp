@@ -40,3 +40,18 @@ Sources (lowest → highest precedence): built-in defaults < config file (`--con
 | `output.verbose`                                                   | `false`                                       | JSON ActionResult instead of compact text                                          |
 | `sessions.expirationHours`, `encrypt`                              | 168, true                                     |                                                                                    |
 | `http.*`                                                           | 127.0.0.1:8931, token from `TG_BROWSER_TOKEN` | Optional transport                                                                 |
+
+## Journal and video recording
+
+| Field              | Default   | Meaning                                                                            |
+| ------------------ | --------- | ---------------------------------------------------------------------------------- |
+| `journal.enabled`  | `true`    | Persist redacted per-session lifecycle, errors, artifacts and workflow events      |
+| `journal.maxBytes` | `5000000` | Rotation threshold per file (1024–5000000); retain current + one previous file     |
+| `recording.video`  | `off`     | `off`, `on`, or `retain-on-failure`                                                |
+| `recording.size`   | omitted   | Optional `{ width, height }` in pixels; Playwright chooses dimensions when omitted |
+
+`session_create.recordVideo` overrides the video mode for one session (`true`: always retain; `false`: off).
+Failure retention considers action and workflow failures; videos finalize when pages/contexts close.
+Existing CDP contexts cannot have recording enabled retroactively. See [Dashboard](DASHBOARD.md) for storage,
+privacy and retention details. `tg-browser-mcp ui` edits the same config with validation and a `.bak` backup;
+restart MCP clients to apply changes. Proxy credential fields are environment variable **names**, never values.

@@ -33,3 +33,14 @@ tg-browser-mcp start --browser edge --headless --profile testing --project banki
 tg-browser-mcp doctor --url https://app.company.local
 TG_BROWSER_TOKEN=… tg-browser-mcp start --transport http --port 8931
 ```
+
+## Local dashboard
+
+```sh
+tg-browser-mcp ui [--port 8940] [--config <file>] [--project <p>] [--open]
+```
+
+Prints a tokenized localhost URL; `--open` launches the OS URL opener without a shell. Only `127.0.0.1`
+binding is accepted. This command may write to stdout because it is not MCP STDIO mode. SIGINT/SIGTERM
+close the dashboard. Settings affect new MCP processes; restart the client after saving. See
+[Dashboard](DASHBOARD.md) for authentication, session history, video recording and API details.

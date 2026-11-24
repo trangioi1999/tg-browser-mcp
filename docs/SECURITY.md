@@ -69,3 +69,26 @@ Focused review of the surface exposed by `--transport http` behind the Worker fr
 Verified unchanged: token required on every request (Worker + container, constant-time), wrong/missing token → 401, metadata/private/`file:` blocked, upload/CDP/trace tools not advertised remotely, high-risk approvals denied.
 
 Open items (need validation on the platform): whether Cloudflare's runtime permits the Chromium sandbox (fallback env `TG_BROWSER_CHROMIUM_SANDBOX=false`); Cloudflare's own `deniedHosts` egress control as a second network-layer SSRF barrier (not enabled: its interaction with browser egress is undocumented in source).
+
+## Local dashboard threat notes
+
+`tg-browser-mcp ui` is a separate operator-only HTTP server bound to `127.0.0.1`. A random 32-byte startup
+token is exchanged for an HttpOnly/SameSite=Strict cookie through a redirect removing the query token.
+API and artifact requests require that cookie or bearer authentication, with constant-time comparison.
+Host checks prevent DNS rebinding; writes require the exact dashboard Origin and `X-TG-CSRF: 1`.
+Do not expose this operator interface through a tunnel or reverse proxy: its token permits configuration
+changes, including changes to security policy for future MCP processes. There is no model approval API.
+
+The dashboard serves only allowlisted artifact/journal file types after realpath containment checks,
+rejects symlink escapes and traversal, and never serves session state, keys or profiles. Config updates
+use schema validation, a 1 MiB JSON limit, private temporary files, atomic rename and a `.bak` backup.
+Credentials use environment variable names; raw secret values are not returned by the JSON API.
+A strict CSP, no-referrer, nosniff and no-store headers protect responses; website text is rendered as
+text, never HTML. The server assumes local files are controlled by the trusted operator, not an attacker
+with filesystem write access racing its reads. Token theft or a compromised same-user local process
+remains outside this boundary.
+
+Journals are best-effort, redacted metadata only, rotated to two bounded private files per session.
+Screenshots, videos and traces can still contain visible sensitive information and are **not** covered
+by journal text redaction. Recording defaults off; `retain-on-failure` removes recordings of successful
+sessions at context close. Abrupt process termination can leave unfinished recordings. See [Dashboard](DASHBOARD.md).
