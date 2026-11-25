@@ -120,6 +120,8 @@ export class SessionManager {
       this.activeKey = this.key(existing.project, existing.name);
       return existing;
     }
+    const pending = this.creating.get(this.key(this.cfg.project, 'default'));
+    if (pending) return pending;
     return this.create({ name: 'default', persistent: this.cfg.browser.persistent });
   }
 
@@ -154,23 +156,45 @@ export class SessionManager {
     return o;
   }
 
+  /** Creations in flight, so concurrent creates of the same name cannot both launch a context (D25). */
+  private readonly creating = new Map<string, Promise<Session>>();
+
   async create(opts: CreateSessionOptions): Promise<Session> {
     const name = assertSafeName('session', opts.name);
     const project = assertSafeName('project', opts.project ?? this.cfg.project);
     const k = this.key(project, name);
+    if (this.creating.has(k)) {
+      throw new TgError(
+        'SESSION_EXISTS',
+        `Session "${name}" is already being created in project "${project}"`,
+        {
+          suggestion: 'Wait for the other session_create to finish, then use session_switch.',
+        },
+      );
+    }
     const existing = this.sessions.get(k);
     if (existing && existing.status === 'active') {
       throw new TgError('SESSION_EXISTS', `Session "${name}" already exists in project "${project}"`, {
         suggestion: 'Use session_switch, or session_delete first.',
       });
     }
-    if (this.sessions.size >= this.cfg.security.maxSessions) {
+    // In-flight creations count against the limit, so concurrent creates cannot exceed it.
+    if (this.sessions.size + this.creating.size >= this.cfg.security.maxSessions) {
       throw new TgError(
         'RESOURCE_LIMIT_EXCEEDED',
         `Maximum of ${this.cfg.security.maxSessions} sessions reached`,
       );
     }
+    const p = this.createUnlocked(opts, name, project);
+    this.creating.set(k, p);
+    try {
+      return await p;
+    } finally {
+      this.creating.delete(k);
+    }
+  }
 
+  private async createUnlocked(opts: CreateSessionOptions, name: string, project: string): Promise<Session> {
     const ctxOpts = this.contextOptions(opts);
     let restored: { cookies: number; origins: number } | undefined;
     if (opts.restore) {

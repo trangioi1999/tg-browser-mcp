@@ -14,6 +14,8 @@ import {
 } from '../security/policy-gate.js';
 import type { DataRedactor } from '../security/data-redactor.js';
 import type { TypedEmitter } from '../shared/events.js';
+import type { LockHolder, Release } from '../shared/async-lock.js';
+import { currentScope, markDispatched } from './call-scope.js';
 import type { SessionManager } from '../session/session-manager.js';
 import type { PageState, Session } from '../session/session.js';
 import { captureSnapshot, formatSnapshot, type Snapshot } from '../snapshot/snapshot-engine.js';
@@ -76,6 +78,9 @@ export interface RecordedAction {
 }
 
 const SETTLE_MAX_MS = 2000;
+/** Budget kept free after the Playwright action for settle, snapshot and formatting. */
+const INNER_MARGIN_MS = SETTLE_MAX_MS + 3000;
+const MIN_INNER_TIMEOUT_MS = 500;
 
 export class ActionExecutor {
   onRecorded: ((a: RecordedAction) => void) | undefined;
@@ -221,6 +226,7 @@ export class ActionExecutor {
     const correlationId = ctx.correlationId ?? shortId('act');
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
+    const release = await this.lockPage(ps, targetDesc ? `${action} ${targetDesc}` : action);
     const t0 = Date.now();
     const startSeq = s.monitor.lastSeq;
     this.events.emit('action.started', {
@@ -243,6 +249,7 @@ export class ActionExecutor {
         ps.page.once('dialog', h);
         setTimeout(() => ps.page.off('dialog', h), this.cfg.browser.timeout + 1000).unref?.();
       });
+      if (action !== 'wait') markDispatched();
       const work = fn(s, ps);
       // If a dialog wins the race, the blocked action may reject later; never leave it unhandled.
       work.catch(() => undefined);
@@ -281,6 +288,8 @@ export class ActionExecutor {
         correlationId,
       });
       throw err;
+    } finally {
+      release();
     }
   }
 
@@ -335,12 +344,14 @@ export class ActionExecutor {
         out.push({ name: p.name, role: p.role, via: p.via === 'self' ? (r ? 'target' : 'focused') : p.via });
     };
     if (r) {
-      const probed = await (r.kind === 'handle'
-        ? r.handle.evaluate(probeActivation, mode)
-        : r.locator.evaluate(probeActivation, mode, { timeout: this.timeout() })
+      const probed = await (
+        r.kind === 'handle'
+          ? r.handle.evaluate(probeActivation, mode)
+          : r.locator.evaluate(probeActivation, mode, { timeout: this.timeout() })
       ).catch(() => undefined);
       // The engine-provided accessible name is checked too (Enter always, Space when it activates).
-      if (mode === 'enter' || !probed || probed.some((p) => p.via === 'self')) out.push(ActionExecutor.self(r));
+      if (mode === 'enter' || !probed || probed.some((p) => p.via === 'self'))
+        out.push(ActionExecutor.self(r));
       if (probed) push(probed);
       return out;
     }
@@ -408,6 +419,7 @@ export class ActionExecutor {
       try {
         const resp = await ps.page.goto(parsed.toString(), {
           waitUntil: ctx.waitUntil ?? 'domcontentloaded',
+          timeout: this.timeout(this.cfg.browser.navigationTimeout),
         });
         status = resp?.status();
       } catch (e) {
@@ -442,12 +454,13 @@ export class ActionExecutor {
 
   async history(kind: 'back' | 'forward' | 'reload', ctx: ActionContext = {}): Promise<ActionResult> {
     return this.run({ snapshot: 'full', ...ctx }, kind, undefined, async (_s, ps) => {
+      const o = { timeout: this.timeout(this.cfg.browser.navigationTimeout) };
       const resp =
         kind === 'back'
-          ? await ps.page.goBack()
+          ? await ps.page.goBack(o)
           : kind === 'forward'
-            ? await ps.page.goForward()
-            : await ps.page.reload();
+            ? await ps.page.goForward(o)
+            : await ps.page.reload(o);
       ps.lastSnapshot = undefined;
       if (!resp && kind !== 'reload') return { message: `No ${kind} history entry`, mode: 'none' };
       return { message: `${kind} → ${this.redactor.url(ps.page.url())}` };
@@ -522,8 +535,48 @@ export class ActionExecutor {
 
   // ───────────────────────── Interaction ─────────────────────────
 
-  private timeout(): number {
-    return this.cfg.browser.timeout;
+  /**
+   * Playwright-level timeout: the configured action timeout, capped below the caller's remaining budget
+   * (minus settle + snapshot margin) so an outer tool/step timeout is a last resort (TGB-007).
+   */
+  private timeout(base = this.cfg.browser.timeout): number {
+    const scope = currentScope();
+    if (!scope) return base;
+    const left = scope.deadline - Date.now() - INNER_MARGIN_MS;
+    return Math.max(MIN_INNER_TIMEOUT_MS, Math.min(base, left));
+  }
+
+  /**
+   * Acquires the page lock (TGB-009). Waits at most for the caller's remaining budget (or the action
+   * timeout); a page whose previous action timed out but is still running reports PAGE_BUSY.
+   */
+  private async lockPage(ps: PageState, label: string): Promise<Release> {
+    const scope = currentScope();
+    const waitMs = scope ? scope.deadline - Date.now() : this.cfg.browser.timeout;
+    const busy = (h: LockHolder | undefined) =>
+      new TgError(
+        'PAGE_BUSY',
+        h
+          ? `Page ${ps.id} is busy: "${h.label}" has been running for ${Date.now() - h.since}ms${h.abandoned ? ' after its caller timed out' : ''}`
+          : `Page ${ps.id} is busy`,
+        { retryable: true, context: { pageId: ps.id, ...(h ? { busyWith: h.label } : {}) } },
+      );
+    const release = await ps.lock.acquire(label, { waitMs, signal: scope?.signal, busyError: busy });
+    scope?.held.add(ps.lock);
+    return () => {
+      scope?.held.delete(ps.lock);
+      release();
+    };
+  }
+
+  /** Runs a read-only inspection under the page lock (snapshots allocate refs; inspections resolve them). */
+  private async locked<T>(ps: PageState, label: string, fn: () => Promise<T>): Promise<T> {
+    const release = await this.lockPage(ps, label);
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   async click(
@@ -645,7 +698,8 @@ export class ActionExecutor {
     return this.run(ctx, 'type', target ? describeTarget(target) : 'focused element', async (s, ps) => {
       let r: Resolved | undefined;
       const delay = Math.min(opts.delayMs ?? 0, 500);
-      if (target && hasTarget(target)) r = await resolveTarget(ps, target, this.timeout(), opts.submit ? 'action' : 'input');
+      if (target && hasTarget(target))
+        r = await resolveTarget(ps, target, this.timeout(), opts.submit ? 'action' : 'input');
       const modes = textActivations(text);
       if (opts.submit) modes.push('enter');
       if (modes.length) await this.gateActivations(ps, r, modes, opts.submit ? 'Submit' : 'Type into');
@@ -686,7 +740,10 @@ export class ActionExecutor {
       await this.gate.enforce({
         verb: 'Select',
         url: ps.page.url(),
-        candidates: [ActionExecutor.self(r), ...values.map((v): PolicyCandidate => ({ name: v, via: 'option' }))],
+        candidates: [
+          ActionExecutor.self(r),
+          ...values.map((v): PolicyCandidate => ({ name: v, via: 'option' })),
+        ],
       });
       let chosen: string[];
       if (r.desc.native === 'select') {
@@ -856,25 +913,27 @@ export class ActionExecutor {
   }> {
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const snap = await captureSnapshot(ps.page, ps.refs, {
-      ...this.snapshotOpts(),
-      ...(opts.scope ? { scopeRef: opts.scope } : {}),
-      ...(opts.interactiveOnly ? { interactiveOnly: true } : {}),
-    });
-    if (opts.scope && snap.nodes.length === 0) {
-      throw new TgError('STALE_ELEMENT_REFERENCE', `Scope ref ${opts.scope} is not on the page`, {
-        context: { ref: opts.scope },
+    return this.locked(ps, 'snapshot', async () => {
+      const snap = await captureSnapshot(ps.page, ps.refs, {
+        ...this.snapshotOpts(),
+        ...(opts.scope ? { scopeRef: opts.scope } : {}),
+        ...(opts.interactiveOnly ? { interactiveOnly: true } : {}),
       });
-    }
-    if (!opts.scope && !opts.interactiveOnly) ps.lastSnapshot = snap;
-    const f = formatSnapshot(snap, {
-      maxChars: Math.min(opts.maxChars ?? this.cfg.snapshot.maxChars, 200_000),
-      ...(opts.page ? { page: opts.page } : {}),
+      if (opts.scope && snap.nodes.length === 0) {
+        throw new TgError('STALE_ELEMENT_REFERENCE', `Scope ref ${opts.scope} is not on the page`, {
+          context: { ref: opts.scope },
+        });
+      }
+      if (!opts.scope && !opts.interactiveOnly) ps.lastSnapshot = snap;
+      const f = formatSnapshot(snap, {
+        maxChars: Math.min(opts.maxChars ?? this.cfg.snapshot.maxChars, 200_000),
+        ...(opts.page ? { page: opts.page } : {}),
+      });
+      let text = f.text;
+      if (ps.pendingDialog)
+        text += `\n\n[dialog open] ${ps.pendingDialog.type}: "${ps.pendingDialog.message}" — call browser_dialog`;
+      return { text, snapshot: snap, page: f.page, totalPages: f.totalPages, sessionId: s.id, pageId: ps.id };
     });
-    let text = f.text;
-    if (ps.pendingDialog)
-      text += `\n\n[dialog open] ${ps.pendingDialog.type}: "${ps.pendingDialog.message}" — call browser_dialog`;
-    return { text, snapshot: snap, page: f.page, totalPages: f.totalPages, sessionId: s.id, pageId: ps.id };
   }
 
   async screenshot(
@@ -897,44 +956,46 @@ export class ActionExecutor {
   }> {
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const type = opts.format ?? 'jpeg';
-    const shotOpts = {
-      type,
-      ...(type === 'jpeg' ? { quality: opts.quality ?? 75 } : {}),
-      scale: 'css' as const,
-      timeout: this.timeout(),
-      // Keep the "controlled by TG Browser MCP" badge out of screenshots.
-      style: INDICATOR_HIDE_CSS,
-    };
-    let buf: Buffer;
-    if (opts.target && hasTarget(opts.target)) {
-      const r = await resolveTarget(ps, opts.target, this.timeout());
-      buf = await (r.kind === 'handle' ? r.handle : r.locator).screenshot(shotOpts);
-    } else buf = await ps.page.screenshot({ ...shotOpts, fullPage: !!opts.fullPage });
-    const mode = this.cfg.output.screenshots;
-    let file: string | undefined;
-    if (opts.path || opts.save || mode !== 'inline') {
-      file = opts.path
-        ? this.permissions.checkFilePath(opts.path, 'write', { extensions: WRITE_EXTENSIONS[type] })
-        : path.join(this.artifactsDir, s.project, s.name, `screenshot-${Date.now()}.${type}`);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, buf);
-      this.events.emit('screenshot.created', {
-        sessionId: s.id,
-        pageId: ps.id,
-        path: file,
+    return this.locked(ps, 'screenshot', async () => {
+      const type = opts.format ?? 'jpeg';
+      const shotOpts = {
+        type,
+        ...(type === 'jpeg' ? { quality: opts.quality ?? 75 } : {}),
+        scale: 'css' as const,
+        timeout: this.timeout(),
+        // Keep the "controlled by TG Browser MCP" badge out of screenshots.
+        style: INDICATOR_HIDE_CSS,
+      };
+      let buf: Buffer;
+      if (opts.target && hasTarget(opts.target)) {
+        const r = await resolveTarget(ps, opts.target, this.timeout());
+        buf = await (r.kind === 'handle' ? r.handle : r.locator).screenshot(shotOpts);
+      } else buf = await ps.page.screenshot({ ...shotOpts, fullPage: !!opts.fullPage });
+      const mode = this.cfg.output.screenshots;
+      let file: string | undefined;
+      if (opts.path || opts.save || mode !== 'inline') {
+        file = opts.path
+          ? this.permissions.checkFilePath(opts.path, 'write', { extensions: WRITE_EXTENSIONS[type] })
+          : path.join(this.artifactsDir, s.project, s.name, `screenshot-${Date.now()}.${type}`);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, buf);
+        this.events.emit('screenshot.created', {
+          sessionId: s.id,
+          pageId: ps.id,
+          path: file,
+          bytes: buf.length,
+        });
+      }
+      const inline = mode !== 'file' && !(opts.path && mode === 'inline' && opts.save === false);
+      return {
+        ...(inline ? { base64: buf.toString('base64') } : {}),
+        mimeType: `image/${type}`,
+        ...(file ? { path: file } : {}),
         bytes: buf.length,
-      });
-    }
-    const inline = mode !== 'file' && !(opts.path && mode === 'inline' && opts.save === false);
-    return {
-      ...(inline ? { base64: buf.toString('base64') } : {}),
-      mimeType: `image/${type}`,
-      ...(file ? { path: file } : {}),
-      bytes: buf.length,
-      pageId: ps.id,
-      sessionId: s.id,
-    };
+        pageId: ps.id,
+        sessionId: s.id,
+      };
+    });
   }
 
   async getText(
@@ -944,49 +1005,60 @@ export class ActionExecutor {
   ): Promise<string> {
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const max = Math.min(opts.maxChars ?? 4000, 50_000);
-    let text: string;
-    if (target && hasTarget(target)) {
-      const r = await resolveTarget(ps, target, this.timeout(), 'read');
-      text = await (r.kind === 'handle'
-        ? r.handle.innerText()
-        : r.locator.innerText({ timeout: this.timeout() }));
-    } else text = await ps.frame().locator('body').innerText({ timeout: this.timeout() });
-    text = this.redactor.text(text.replace(/\n{3,}/g, '\n\n'), { emails: false });
-    return text.length > max ? `${text.slice(0, max)}\n…[truncated ${text.length - max} chars]` : text;
+    return this.locked(ps, 'getText', async () => {
+      const max = Math.min(opts.maxChars ?? 4000, 50_000);
+      let text: string;
+      if (target && hasTarget(target)) {
+        const r = await resolveTarget(ps, target, this.timeout(), 'read');
+        text = await (r.kind === 'handle'
+          ? r.handle.innerText()
+          : r.locator.innerText({ timeout: this.timeout() }));
+      } else text = await ps.frame().locator('body').innerText({ timeout: this.timeout() });
+      text = this.redactor.text(text.replace(/\n{3,}/g, '\n\n'), { emails: false });
+      return text.length > max ? `${text.slice(0, max)}\n…[truncated ${text.length - max} chars]` : text;
+    });
   }
 
   async getElement(target: Target, ctx: ActionContext = {}): Promise<Record<string, unknown>> {
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const r = await resolveTarget(ps, target, this.timeout(), 'read');
-    const el = r.kind === 'handle' ? r.handle : r.locator;
-    const [box, visible, enabled] = await Promise.all([
-      el.boundingBox().catch(() => null),
-      el.isVisible().catch(() => false),
-      el.isEnabled().catch(() => false),
-    ]);
-    const loc = suggestLocator(r.desc);
-    return {
-      ...r.desc,
-      visible,
-      enabled,
-      box: box
-        ? { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) }
-        : null,
-      locator: loc.expr,
-    };
+    return this.locked(ps, 'getElement', async () => {
+      const r = await resolveTarget(ps, target, this.timeout(), 'read');
+      const el = r.kind === 'handle' ? r.handle : r.locator;
+      const [box, visible, enabled] = await Promise.all([
+        el.boundingBox().catch(() => null),
+        el.isVisible().catch(() => false),
+        el.isEnabled().catch(() => false),
+      ]);
+      const loc = suggestLocator(r.desc);
+      return {
+        ...r.desc,
+        visible,
+        enabled,
+        box: box
+          ? {
+              x: Math.round(box.x),
+              y: Math.round(box.y),
+              w: Math.round(box.width),
+              h: Math.round(box.height),
+            }
+          : null,
+        locator: loc.expr,
+      };
+    });
   }
 
   async inputValue(target: Target, ctx: ActionContext = {}): Promise<string> {
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const r = await resolveTarget(ps, target, this.timeout(), 'read');
-    const v =
-      r.kind === 'handle'
-        ? await r.handle.inputValue()
-        : await r.locator.inputValue({ timeout: this.timeout() });
-    return this.isSensitiveField(r.desc) ? '[REDACTED]' : v;
+    return this.locked(ps, 'inputValue', async () => {
+      const r = await resolveTarget(ps, target, this.timeout(), 'read');
+      const v =
+        r.kind === 'handle'
+          ? await r.handle.inputValue()
+          : await r.locator.inputValue({ timeout: this.timeout() });
+      return this.isSensitiveField(r.desc) ? '[REDACTED]' : v;
+    });
   }
 
   async getAttributes(
@@ -996,35 +1068,39 @@ export class ActionExecutor {
   ): Promise<Record<string, string>> {
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const r = await resolveTarget(ps, target, this.timeout(), 'read');
-    const attrFn = (n: Element): Record<string, string> =>
-      Object.fromEntries(Array.from(n.attributes).map((a) => [a.name, a.value]));
-    const attrs = r.kind === 'handle' ? await r.handle.evaluate(attrFn) : await r.locator.evaluate(attrFn);
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(attrs)) {
-      if (names?.length && !names.includes(k)) continue;
-      out[k] =
-        (k === 'value' && this.isSensitiveField(r.desc)) || this.redactor.isSensitiveKey(k)
-          ? '[REDACTED]'
-          : truncate(this.redactor.text(v), 300);
-    }
-    return out;
+    return this.locked(ps, 'getAttributes', async () => {
+      const r = await resolveTarget(ps, target, this.timeout(), 'read');
+      const attrFn = (n: Element): Record<string, string> =>
+        Object.fromEntries(Array.from(n.attributes).map((a) => [a.name, a.value]));
+      const attrs = r.kind === 'handle' ? await r.handle.evaluate(attrFn) : await r.locator.evaluate(attrFn);
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(attrs)) {
+        if (names?.length && !names.includes(k)) continue;
+        out[k] =
+          (k === 'value' && this.isSensitiveField(r.desc)) || this.redactor.isSensitiveKey(k)
+            ? '[REDACTED]'
+            : truncate(this.redactor.text(v), 300);
+      }
+      return out;
+    });
   }
 
   async ariaTree(target: Target | undefined, ctx: ActionContext = {}): Promise<string> {
     const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    let yaml: string;
-    if (target && hasTarget(target)) {
-      const r = await resolveTarget(ps, target, this.timeout(), 'read');
-      if (r.kind === 'locator') yaml = await r.locator.ariaSnapshot({ timeout: this.timeout() });
-      else {
-        const sel = suggestLocator(r.desc).target;
-        const rr = await resolveTarget(ps, sel, this.timeout(), 'read');
-        yaml = rr.kind === 'locator' ? await rr.locator.ariaSnapshot({ timeout: this.timeout() }) : '';
-      }
-    } else yaml = await ps.frame().locator('body').ariaSnapshot({ timeout: this.timeout() });
-    return truncate(this.redactor.text(yaml, { emails: false }), this.cfg.snapshot.maxChars);
+    return this.locked(ps, 'ariaTree', async () => {
+      let yaml: string;
+      if (target && hasTarget(target)) {
+        const r = await resolveTarget(ps, target, this.timeout(), 'read');
+        if (r.kind === 'locator') yaml = await r.locator.ariaSnapshot({ timeout: this.timeout() });
+        else {
+          const sel = suggestLocator(r.desc).target;
+          const rr = await resolveTarget(ps, sel, this.timeout(), 'read');
+          yaml = rr.kind === 'locator' ? await rr.locator.ariaSnapshot({ timeout: this.timeout() }) : '';
+        }
+      } else yaml = await ps.frame().locator('body').ariaSnapshot({ timeout: this.timeout() });
+      return truncate(this.redactor.text(yaml, { emails: false }), this.cfg.snapshot.maxChars);
+    });
   }
 
   async pageInfo(

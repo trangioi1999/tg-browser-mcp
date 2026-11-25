@@ -1,3 +1,4 @@
+import { budgetTimeoutError, runWithBudget } from '../harness/call-scope.js';
 import { classifyAction } from '../harness/action-classes.js';
 import { SECRET_REFERENCE, isSecretValuePath } from './secret-policy.js';
 import { writeFileAtomic } from './atomic-write.js';
@@ -332,10 +333,20 @@ export class WorkflowEngine {
           sr.attempts = attempt;
           try {
             const input = resolvedInput;
-            const out = await withTimeout(
-              this.runStep(step, input, vars, secretValues, signal),
-              step.timeout ?? wf.defaults.timeout ?? this.h.config.browser.timeout * 2,
-              signal,
+            const budget = step.timeout ?? wf.defaults.timeout ?? this.h.config.browser.timeout * 2;
+            const out = await runWithBudget(
+              budget,
+              () => this.runStep(step, input, vars, secretValues, signal),
+              {
+                signal,
+                onTimeout: (scope) =>
+                  budgetTimeoutError(
+                    `Step ${step.id}`,
+                    budget,
+                    scope,
+                    actionClass === 'read' || actionClass === 'idempotent-input',
+                  ),
+              },
             );
             Object.assign(sr, out);
             sr.status = 'passed';
@@ -692,23 +703,4 @@ function maskSecrets(s: string, secrets: Set<string>): string {
 
 function redactVars(vars: Record<string, string>, secrets: Set<string>): Record<string, string> {
   return Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, secrets.has(v) ? '[secret]' : v]));
-}
-
-async function withTimeout<T>(p: Promise<T>, ms: number, signal: AbortSignal): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  p.catch(() => undefined);
-  try {
-    return await Promise.race([
-      p,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new TgError('ACTION_TIMEOUT', `Step exceeded ${ms}ms`, { retryable: true })),
-          ms,
-        );
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }

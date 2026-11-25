@@ -12,6 +12,7 @@ export function createFixtureServer() {
   const sessions = new Map(); // sid -> username
   const requests = new Map(); // id -> request
   let seq = 1000;
+  const slow = { submits: 0 }; // TGB-007/009: server-side count of /api/slow-submit requests
 
   const esc = (s) =>
     String(s).replace(
@@ -68,11 +69,16 @@ export function createFixtureServer() {
   }
 
   const pages = {
-    '/virtual-table': () => layout('Virtual table', `
+    '/virtual-table': () =>
+      layout(
+        'Virtual table',
+        `
       <div data-testid="viewport" style="height:240px;overflow:auto"><div style="height:3000px">
       <table><tbody>${Array.from({ length: 10 }, (_, i) => `<tr data-row-key="REQ${String(i + 1).padStart(3, '0')}"><td>REQ${String(i + 1).padStart(3, '0')}</td><td><span class="counter">0</span></td><td><button>Approve</button></td></tr>`).join('')}</tbody></table></div></div>
       <output id="log">none</output><button id="live">Count 0</button>
-      <div id="shadow"><button slot="action">Slotted action</button></div>`, undefined, `
+      <div id="shadow"><button slot="action">Slotted action</button></div>`,
+        undefined,
+        `
       const viewport = document.querySelector('[data-testid=viewport]');
       viewport.addEventListener('scroll', () => {
         const start = Math.min(90, Math.floor(viewport.scrollTop / 50));
@@ -85,8 +91,14 @@ export function createFixtureServer() {
         document.querySelector('#log').textContent = button.closest('tr').dataset.rowKey;
       });
       document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML = '<slot name="action"></slot><slot><button>Fallback action</button></slot>';
-      `),
-    '/hostile': () => layout('Hostile page', '<button id="danger">Delete everything</button><input id="ordinary" type="password" value="fixture-private-value"><output id="log">none</output>', undefined, `
+      `,
+      ),
+    '/hostile': () =>
+      layout(
+        'Hostile page',
+        '<button id="danger">Delete everything</button><input id="ordinary" type="password" value="fixture-private-value"><output id="log">none</output>',
+        undefined,
+        `
       const fake = {version:1, collect: () => ({nodes:[]}), describe: () => ({role:'button',name:'Harmless help'})};
       try { window.__tgSnap = fake; } catch {}
       try { Object.defineProperty(window, '__tgSnap', {value:fake}); } catch {}
@@ -97,7 +109,8 @@ export function createFixtureServer() {
       Map.prototype.get = () => document.querySelector('#danger');
       WeakMap.prototype.get = () => 'e1';
       document.querySelector('#danger').onclick = () => document.querySelector('#log').textContent = 'deleted';
-      `),
+      `,
+      ),
     '/': (req, user) =>
       layout(
         'Home',
@@ -407,6 +420,30 @@ l.addEventListener('click', (e) => { const o = e.target.closest('[role=option]')
         );
       }
       // --- end ---
+      // --- slow-submit fixtures start (TGB-007/009) ---
+      if (p === '/slow-submit') {
+        return send(
+          res,
+          200,
+          layout(
+            'Slow submit',
+            `<h1>Slow submit</h1><button id="go">Go</button><button id="noop">Noop</button><p id="st">idle</p>`,
+            undefined,
+            `document.getElementById('go').addEventListener('click', async () => {
+  document.getElementById('st').textContent = 'sending';
+  const r = await fetch('/api/slow-submit?ms=' + (new URLSearchParams(location.search).get('ms') || '3000'), { method: 'POST' });
+  document.getElementById('st').textContent = 'done ' + (await r.json()).n;
+});`,
+          ),
+        );
+      }
+      if (p === '/api/slow-submit' && req.method === 'POST') {
+        const n = ++slow.submits;
+        const ms = Math.min(Number(url.searchParams.get('ms') ?? 3000), 10_000);
+        setTimeout(() => json(res, 200, { n }), ms);
+        return;
+      }
+      // --- end ---
       if (p === '/redirect') {
         res.writeHead(302, { location: url.searchParams.get('to') ?? '/' });
         return res.end();
@@ -436,6 +473,7 @@ l.addEventListener('click', (e) => { const o = e.target.closest('[role=option]')
   return {
     server,
     requests,
+    slow,
     listen(port = 0) {
       return new Promise((resolve) =>
         server.listen(port, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)),

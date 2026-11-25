@@ -18,6 +18,7 @@ export const ErrorCodes = [
   'ELEMENT_AMBIGUOUS',
   'STALE_ELEMENT_REFERENCE',
   'TARGET_CHANGED',
+  'PAGE_BUSY',
   'ACTION_TIMEOUT',
   'ACTION_FAILED',
   'NAVIGATION_TIMEOUT',
@@ -62,6 +63,8 @@ const DEFAULT_SUGGESTIONS: Partial<Record<ErrorCode, string>> = {
   ELEMENT_NOT_VISIBLE: 'Scroll the element into view, close overlays, or wait for it to appear.',
   ELEMENT_AMBIGUOUS: 'Use a snapshot ref or a more specific locator (role + exact name).',
   TARGET_CHANGED: 'Target identity changed. Call browser_snapshot and review the new target before retrying.',
+  PAGE_BUSY:
+    'Another action is still running on this page. Wait, then call browser_snapshot to see its effect before acting again.',
   STALE_ELEMENT_REFERENCE: 'The page changed since the snapshot. Call browser_snapshot to get fresh refs.',
   ACTION_TIMEOUT: 'Element may be disabled, covered, or still loading. Take a snapshot and check its state.',
   NAVIGATION_TIMEOUT: 'Check that the server is running and reachable. Run network_diagnose for the URL.',

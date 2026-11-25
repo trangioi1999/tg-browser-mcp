@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { TgConfig } from '../config/schema.js';
 import { BrowserHarness } from '../harness/browser-harness.js';
+import { budgetTimeoutError, runWithBudget } from '../harness/call-scope.js';
 import type { Session } from '../session/session.js';
 import { WorkflowEngine } from '../workflow/workflow-engine.js';
 import { WorkflowRecorder } from '../workflow/workflow-recorder.js';
@@ -32,21 +33,6 @@ export interface McpServerHandle {
   harness: BrowserHarness;
   tools: ToolDef[];
   close(): Promise<void>;
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number, name: string): Promise<T> {
-  let t: NodeJS.Timeout | undefined;
-  p.catch(() => undefined);
-  return Promise.race([
-    p,
-    new Promise<never>((_, reject) => {
-      t = setTimeout(
-        () =>
-          reject(new TgError('ACTION_TIMEOUT', `${name} exceeded its ${ms}ms limit`, { retryable: true })),
-        ms,
-      );
-    }),
-  ]).finally(() => clearTimeout(t));
 }
 
 /**
@@ -120,7 +106,9 @@ export function createMcpServer(
           }
           input = parsed.data as Record<string, unknown>;
           targeted = auditSession(tool, input, harness) ?? targeted;
-          const out = await withTimeout(tool.handler(parsed.data as never, ctx), tool.timeoutMs, tool.name);
+          const out = await runWithBudget(tool.timeoutMs, () => tool.handler(parsed.data as never, ctx), {
+            onTimeout: (scope) => budgetTimeoutError(tool.name, tool.timeoutMs, scope, tool.readOnly),
+          });
           if (out.isError) status = 'error';
           return out;
         } catch (e) {
