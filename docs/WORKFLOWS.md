@@ -72,7 +72,8 @@ Variables: workflow `variables` < run-time `variables`; `${secret.NAME}` reads `
 - Steps run sequentially; sessions keep state between steps (cross-user flows).
 - On failure: screenshot (`<dataDir>/artifacts/runs/<runId>/failure-<step>.png`), URL, recent console errors and failed requests are attached to the run.
 - Checkpoints: the run record is written after each step (`<dataDir>/runs/<project>/<runId>.json`); `startAt` resumes from a step when the sessions are already in the right state.
-- Cancellation: `workflow_cancel runId=…` (or the MCP request's abort signal).
+- Cancellation: `workflow_cancel runId=…` (or the MCP request's abort signal). A step running at that moment is recorded as `cancelled` with `dispatch not_started` (nothing was sent to the page) or `dispatch unknown` (the action was dispatched and may still complete — check before re-running); a dialog it left open is dismissed and page loads are stopped. Later steps are `skipped`.
+- Step timeouts: inner browser timeouts stay below the step `timeout`. A timeout after a non-idempotent action was dispatched fails with `ACTION_TIMEOUT` (`Retry safe: no`, outcome `INDETERMINATE`) and is never retried; the page answers `PAGE_BUSY` until that action settles.
 - `background: true` returns a run id immediately; poll `workflow_status`.
 
 ## Recording and test generation

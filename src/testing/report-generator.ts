@@ -6,6 +6,7 @@ const ICON: Record<string, string> = {
   skipped: '⏭️',
   pending: '…',
   running: '▶',
+  cancelled: '⏹️',
 };
 
 export function markdownReport(runs: RunRecord[]): string {
@@ -59,7 +60,7 @@ export function junitReport(runs: RunRecord[]): string {
   const out: string[] = ['<?xml version="1.0" encoding="UTF-8"?>', '<testsuites name="tg-browser">'];
   for (const r of runs) {
     const failures = r.steps.filter((s) => s.status === 'failed').length;
-    const skipped = r.steps.filter((s) => s.status === 'skipped').length;
+    const skipped = r.steps.filter((s) => s.status === 'skipped' || s.status === 'cancelled').length;
     out.push(
       `  <testsuite name="${xml(r.workflow)}" tests="${r.steps.length}" failures="${failures}" skipped="${skipped}" time="${((r.durationMs ?? 0) / 1000).toFixed(3)}" timestamp="${r.startedAt}">`,
     );
@@ -71,7 +72,8 @@ export function junitReport(runs: RunRecord[]): string {
         out.push(
           `      <failure message="${xml(s.error?.message ?? s.message)}" type="${xml(s.error?.code ?? 'FAILED')}"/>`,
         );
-      if (s.status === 'skipped') out.push(`      <skipped message="${xml(s.message)}"/>`);
+      if (s.status === 'skipped' || s.status === 'cancelled')
+        out.push(`      <skipped message="${xml(s.message)}"/>`);
       out.push('    </testcase>');
     }
     out.push('  </testsuite>');

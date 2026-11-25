@@ -73,15 +73,18 @@ tool call → Zod validate → timeout wrapper → ActionExecutor.run()
 
 ## Data on disk (`dataDir`, default `~/.tg-browser`, mode 0700)
 
-| Path                              | Content                                                  |
-| --------------------------------- | -------------------------------------------------------- |
-| `sessions/<project>/<name>.state` | AES-256-GCM encrypted Playwright storage state           |
-| `keys/session.key`                | Local key (0600), unless `TG_BROWSER_SESSION_KEY` is set |
-| `profiles/...`                    | Dedicated persistent browser profiles                    |
-| `workflows/<project>/*.json`      | Workflow definitions                                     |
-| `runs/<project>/<runId>.json`     | Run checkpoints/results (secrets masked)                 |
-| `artifacts/...`                   | Screenshots, traces, reports                             |
-| `audit/audit-YYYY-MM-DD.jsonl`    | Audit log (no values, cookies or tokens)                 |
+| Path                                        | Content                                                                                                                     |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `sessions/<project>/<name>.state`           | AES-256-GCM encrypted Playwright storage state                                                                              |
+| `keys/session.key`                          | Local key (0600), unless `TG_BROWSER_SESSION_KEY` is set                                                                    |
+| `profiles/...`                              | Dedicated persistent browser profiles                                                                                       |
+| `workflows/<project>/*.json`                | Workflow definitions                                                                                                        |
+| `runs/<project>/<runId>.json`               | Run checkpoints/results (secrets masked); written atomically (temp file + rename), unreadable files are skipped by listings |
+| `artifacts/<project>/<session>/...`         | Screenshots, traces; the only default write root for agent-chosen paths (`security.fileAccess.writeRoots`)                  |
+| `artifacts/<project>/<session>/videos/`     | Session videos (`recording.video`)                                                                                          |
+| `artifacts/<project>/reports/`              | Generated tests and reports                                                                                                 |
+| `journal/<project>/<session>/events*.jsonl` | Per-session event journal (redacted, rotated to two bounded files)                                                          |
+| `audit/audit-YYYY-MM-DD.jsonl`              | Audit log (no values, cookies or tokens)                                                                                    |
 
 SQLite was not needed for the MVP: all metadata is small, per-project and append-mostly; JSON files keep the install free of native modules (see ADR-0004).
 

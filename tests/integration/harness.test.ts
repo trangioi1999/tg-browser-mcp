@@ -274,6 +274,23 @@ describe('SDK sessions in non-default projects (D8)', () => {
     await p2.close();
     await dflt.close();
   });
+
+  it('let name-addressed tools (no project param) reach a session that exists in one other project', async () => {
+    const only = await h.createSession({ name: 'elsewhere', project: 'p3' });
+    await only.navigate(`${base}/login`);
+    // MCP page tools pass only `session`; the name exists in exactly one project.
+    const snap = await h.actions.snapshot({}, { session: 'elsewhere' });
+    expect(snap.sessionId).toBe(only.raw.id);
+    const twin = await h.createSession({ name: 'elsewhere', project: 'p4' });
+    await expect(h.actions.snapshot({}, { session: 'elsewhere' })).rejects.toMatchObject({
+      code: 'SESSION_AMBIGUOUS',
+      suggestion: expect.stringContaining('session id'),
+    });
+    // The id stays unambiguous.
+    expect((await h.actions.snapshot({}, { session: twin.raw.id })).sessionId).toBe(twin.raw.id);
+    await only.close();
+    await twin.close();
+  });
 });
 
 describe('labels bound to controls', () => {

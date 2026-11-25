@@ -45,6 +45,8 @@ export interface BudgetOptions {
   signal?: AbortSignal | undefined;
   /** Builds the timeout error from the scope's dispatch state. */
   onTimeout: (scope: CallScope) => Error;
+  /** Receives the scope before `fn` starts (e.g. to read its dispatch state after a cancellation). */
+  onScope?: (scope: CallScope) => void;
 }
 
 /**
@@ -83,6 +85,7 @@ export async function runWithBudget<T>(ms: number, fn: () => Promise<T>, opts: B
     listeners.forEach((off) => off());
     throw controller.signal.reason;
   }
+  opts.onScope?.(scope);
   const work = storage.run(scope, fn);
   work.catch(() => undefined);
   outer.catch(() => undefined);

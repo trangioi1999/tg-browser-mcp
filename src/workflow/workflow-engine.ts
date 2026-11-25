@@ -1,4 +1,4 @@
-import { budgetTimeoutError, runWithBudget } from '../harness/call-scope.js';
+import { budgetTimeoutError, runWithBudget, type CallScope } from '../harness/call-scope.js';
 import { classifyAction } from '../harness/action-classes.js';
 import { SECRET_REFERENCE, isSecretValuePath } from './secret-policy.js';
 import { writeFileAtomic } from './atomic-write.js';
@@ -17,7 +17,7 @@ import { type Workflow, type WorkflowStep } from './workflow-schema.js';
 import { assertValidWorkflow } from './workflow-validator.js';
 import type { Target } from '../harness/target.js';
 
-export type StepStatus = 'passed' | 'failed' | 'skipped' | 'pending' | 'running';
+export type StepStatus = 'passed' | 'failed' | 'skipped' | 'pending' | 'running' | 'cancelled';
 
 export interface StepResult {
   id: string;
@@ -91,7 +91,7 @@ const StoredRunSchema = z.object({
       id: z.string(),
       action: z.string(),
       session: z.string(),
-      status: z.enum(['passed', 'failed', 'skipped', 'pending', 'running']),
+      status: z.enum(['passed', 'failed', 'skipped', 'pending', 'running', 'cancelled']),
       attempts: z.number(),
       durationMs: z.number(),
       message: z.string(),
@@ -329,6 +329,7 @@ export class WorkflowEngine {
           actionClass !== 'high-impact' && (actionClass !== 'non-idempotent' || step.idempotent === true);
         const maxAttempts = 1 + (retryable ? (step.retry?.attempts ?? 0) : 0);
         let lastErr: TgError | undefined;
+        let stepScope: CallScope | undefined;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           sr.attempts = attempt;
           try {
@@ -339,6 +340,7 @@ export class WorkflowEngine {
               () => this.runStep(step, input, vars, secretValues, signal),
               {
                 signal,
+                onScope: (scope) => (stepScope = scope),
                 onTimeout: (scope) =>
                   budgetTimeoutError(
                     `Step ${step.id}`,
@@ -361,6 +363,17 @@ export class WorkflowEngine {
           }
         }
         sr.durationMs = Date.now() - st;
+        if (lastErr && signal.aborted) {
+          // Cancelled while the step was running (TGB-007, doc 04 §6.3): record whether the action had been
+          // dispatched, and release what would otherwise block the session (open dialog, loading page).
+          const dispatch = stepScope?.dispatched ? 'unknown' : 'not_started';
+          sr.status = 'cancelled';
+          sr.message = `cancelled during step (dispatch ${dispatch})`;
+          sr.error = { ...lastErr.toJSON(), context: { ...lastErr.context, dispatch } };
+          this.h.events.emit('workflow.step', { runId: record.runId, stepId: step.id, status: 'cancelled' });
+          await this.releaseCancelledStep(step.session);
+          throw signal.reason;
+        }
         if (lastErr) {
           sr.status = 'failed';
           sr.error = lastErr.toJSON();
@@ -424,6 +437,21 @@ export class WorkflowEngine {
         ...(decl.restore ? { restore: true } : {}),
         ...(decl.browser ? { browser: browserShortcut(decl.browser) } : {}),
       });
+    }
+  }
+
+  /** Best-effort cleanup after a mid-step cancellation: dismiss a blocking dialog and stop page loads. */
+  private async releaseCancelledStep(sessionName: string | undefined): Promise<void> {
+    const s = sessionName ? this.h.sessions.find(sessionName) : this.h.sessions.active;
+    if (!s) return;
+    for (const ps of s.pages.values()) {
+      if (ps.page.isClosed()) continue;
+      const d = ps.pendingDialog;
+      if (d) {
+        ps.pendingDialog = undefined;
+        await d.dialog.dismiss().catch(() => undefined);
+      }
+      await ps.page.evaluate(() => window.stop()).catch(() => undefined);
     }
   }
 

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createFixtureServer } from '../fixtures/app/server.mjs';
 import { testHarness } from '../helpers.js';
 import { budgetTimeoutError, runWithBudget } from '../../src/harness/call-scope.js';
+import { WorkflowEngine } from '../../src/workflow/workflow-engine.js';
 
 /**
  * TGB-007 / TGB-009: per-page lock and timeouts that do not lie, against a submit endpoint that
@@ -103,5 +104,28 @@ describe('timeouts and page lock (real browser)', () => {
     const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
     expect(rejected.reason).toMatchObject({ code: 'SESSION_EXISTS' });
     expect(h.sessions.list().filter((s) => s.name === 'dup-create')).toHaveLength(1);
+  });
+
+  it('cancelling a workflow mid-step records the step as cancelled with dispatch unknown (doc 04 §6.3)', async () => {
+    const engine = new WorkflowEngine(h);
+    const { name, ps } = await slowPage();
+    const before = app.slow.submits;
+    const { runId, promise } = engine.start({
+      name: 'cancel-mid-step',
+      steps: [
+        { id: 'pay', action: 'click', session: name, input: { role: 'button', name: 'Go' } },
+        { id: 'after', action: 'click', session: name, input: { role: 'button', name: 'Noop' } },
+      ],
+    });
+    await vi.waitFor(() => expect(app.slow.submits).toBe(before + 1), { timeout: 5000 });
+    expect(engine.cancel(runId)).toBe(true);
+    const run = await promise;
+    expect(run.status).toBe('cancelled');
+    const pay = run.steps.find((st) => st.id === 'pay')!;
+    expect(pay.status).toBe('cancelled');
+    expect(pay.message).toContain('dispatch unknown');
+    expect(run.steps.find((st) => st.id === 'after')!.status).toBe('skipped');
+    await vi.waitFor(() => expect(ps.lock.holder).toBeUndefined(), { timeout: 5000 });
+    expect(app.slow.submits).toBe(before + 1);
   });
 });

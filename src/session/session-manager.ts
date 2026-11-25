@@ -91,14 +91,38 @@ export class SessionManager {
     );
   }
 
+  /**
+   * Resolves a session by id, or by name in `project` (default: the configured project). When no project
+   * is given and the name is not in the configured project, a name that exists in exactly one other
+   * project resolves to that session, so MCP page tools can address sessions created with
+   * `session_create project=...` (D8). A name present in several other projects is ambiguous.
+   */
   get(nameOrId?: string, project?: string): Session {
-    const s = nameOrId ? this.find(nameOrId, project) : this.active;
+    let s = nameOrId ? this.find(nameOrId, project) : this.active;
+    if (nameOrId && !s && project === undefined) {
+      const named = [...this.sessions.values()].filter((x) => x.name === nameOrId && x.status === 'active');
+      if (named.length > 1) {
+        throw new TgError(
+          'SESSION_AMBIGUOUS',
+          `Session name "${nameOrId}" exists in several projects: ${named.map((x) => `${x.project}/${x.name} (${x.id})`).join(', ')}`,
+          {
+            context: { sessions: named.map((x) => ({ id: x.id, project: x.project, name: x.name })) },
+            suggestion: 'Pass the session id instead of its name.',
+          },
+        );
+      }
+      s = named[0];
+    }
     if (!s || s.status !== 'active') {
       throw new TgError(
         'SESSION_NOT_FOUND',
         nameOrId ? `Session "${nameOrId}" not found` : 'No active session',
         {
-          context: { sessions: this.list().map((x) => x.name) },
+          context: {
+            sessions: this.list().map((x) =>
+              x.project === this.cfg.project ? x.name : `${x.project}/${x.name} (${x.id})`,
+            ),
+          },
         },
       );
     }

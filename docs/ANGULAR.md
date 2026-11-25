@@ -2,7 +2,9 @@
 
 TG Browser is framework-independent; it interacts like a user through the accessibility tree. Snapshots report detected frameworks (`Framework: Angular 20.1.0 + Angular Material`) via `ng-version` and component class markers.
 
-## What works generically (and is tested on the fixture app)
+## What works generically
+
+> **Verification status.** The fixture app (`tests/fixtures/app/server.mjs`) tests the underlying _generic_ patterns — ARIA comboboxes and listboxes, editable comboboxes, modal dialogs, tables, virtual scrolling (recycled rows), open shadow DOM, nested iframes. It contains **no real Angular Material, CDK or PrimeNG markup**, so the component rows below describe the intended mapping and are not yet verified against those libraries. Framework fixtures are planned (backlog TGB-022).
 
 | Pattern                                                       | How                                                                                                                                                                                                                 |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -33,4 +35,4 @@ TG Browser is framework-independent; it interacts like a user through the access
 - `div (click)` without role still appears as `clickable "text"` (cursor:pointer heuristic), but prefer buttons.
 - Angular change detection is async: actions wait for pending XHR/fetch (≤2s) before diffing; use `browser_wait` for longer operations.
 
-Framework-specific adapters beyond the ARIA combobox were not added: the generic approach covered Material/PrimeNG patterns without measurable gain from special casing (see ADR-0005).
+Framework-specific adapters beyond the ARIA combobox were not added: the generic ARIA approach is expected to cover Material/PrimeNG patterns (see ADR-0005); this will be measured once framework fixtures exist.
