@@ -54,7 +54,10 @@ export function pickEvictable<K, S extends ReapableSession>(
  * Marks one request in flight until its response finishes (or the connection drops), refreshing
  * `lastSeen` at both ends so a long tool call never looks idle.
  */
-export function trackRequest(s: ReapableSession, res: { once(event: 'close', cb: () => void): unknown }): void {
+export function trackRequest(
+  s: ReapableSession,
+  res: { once(event: 'close', cb: () => void): unknown },
+): void {
   s.inFlight++;
   s.lastSeen = Date.now();
   let done = false;

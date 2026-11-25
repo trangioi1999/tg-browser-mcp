@@ -33,7 +33,11 @@ export const sessionTools = [
       });
       let extra = '';
       if (a.url) {
-        const r = await harness.actions.navigate(a.url, { session: s.name, project: s.project, snapshot: 'none' });
+        const r = await harness.actions.navigate(a.url, {
+          session: s.name,
+          project: s.project,
+          snapshot: 'none',
+        });
         extra = `\n${r.message}`;
       }
       return text(

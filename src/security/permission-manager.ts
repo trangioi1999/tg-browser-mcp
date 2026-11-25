@@ -110,11 +110,7 @@ export class PermissionManager {
    * extension, and must not replace an existing file unless `fileAccess.allowOverwrite` is set (symlinks
    * and non-regular files are never replaced). Symlinks in parent directories are resolved.
    */
-  checkFilePath(
-    p: string,
-    purpose: 'read' | 'write',
-    opts: { extensions?: readonly string[] } = {},
-  ): string {
+  checkFilePath(p: string, purpose: 'read' | 'write', opts: { extensions?: readonly string[] } = {}): string {
     const abs = path.resolve(p);
     let real: string;
     if (purpose === 'read') {
@@ -146,10 +142,14 @@ export class PermissionManager {
     const exts = opts.extensions ?? DEFAULT_WRITE_EXTENSIONS;
     const base = path.basename(real).toLowerCase();
     if (!exts.some((e) => base.endsWith(e.toLowerCase()) && base.length > e.length)) {
-      throw new TgError('FILE_ACCESS_DENIED', `File type not allowed for this output: ${path.basename(real)}`, {
-        context: { allowedExtensions: [...exts] },
-        suggestion: `Use a file name ending in ${exts.join(', ')}.`,
-      });
+      throw new TgError(
+        'FILE_ACCESS_DENIED',
+        `File type not allowed for this output: ${path.basename(real)}`,
+        {
+          context: { allowedExtensions: [...exts] },
+          suggestion: `Use a file name ending in ${exts.join(', ')}.`,
+        },
+      );
     }
     let st: fs.Stats | undefined;
     try {

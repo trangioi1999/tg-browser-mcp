@@ -105,7 +105,10 @@ describe('security policies (real browser)', () => {
     await expect(
       h.actions.upload({ label: 'Email' }, ['/etc/hosts'], { session: 'inject' }),
     ).rejects.toMatchObject({ code: 'FILE_ACCESS_DENIED' });
-    const ok = await s.screenshot({ path: path.join(h.config.dataDir, 'artifacts', 'ok.png'), format: 'png' });
+    const ok = await s.screenshot({
+      path: path.join(h.config.dataDir, 'artifacts', 'ok.png'),
+      format: 'png',
+    });
     expect(ok.path).toContain('ok.png');
   });
 
@@ -120,10 +123,12 @@ describe('security policies (real browser)', () => {
       code: 'FILE_ACCESS_DENIED',
     });
     // Extension allowlist per output kind.
-    await expect(s.screenshot({ path: path.join(artifacts, 'evil.js') })).rejects.toThrow(/File type not allowed/);
-    await expect(
-      s.screenshot({ path: path.join(artifacts, 'shot.jpg'), format: 'png' }),
-    ).rejects.toThrow(/File type not allowed/);
+    await expect(s.screenshot({ path: path.join(artifacts, 'evil.js') })).rejects.toThrow(
+      /File type not allowed/,
+    );
+    await expect(s.screenshot({ path: path.join(artifacts, 'shot.jpg'), format: 'png' })).rejects.toThrow(
+      /File type not allowed/,
+    );
     await expect(
       h.actions.traceStop(path.join(artifacts, 'trace.json'), { session: 'inject' }),
     ).rejects.toThrow(/File type not allowed/);
@@ -131,7 +136,9 @@ describe('security policies (real browser)', () => {
     const first = await s.screenshot({ path: path.join(artifacts, 'once.jpeg') });
     expect(first.path).toContain('once.jpeg');
     await expect(s.screenshot({ path: path.join(artifacts, 'once.jpeg') })).rejects.toThrow(/already exists/);
-    expect(h.permissions.checkFilePath(path.join(artifacts, 'flow.spec.ts'), 'write')).toContain('flow.spec.ts');
+    expect(h.permissions.checkFilePath(path.join(artifacts, 'flow.spec.ts'), 'write')).toContain(
+      'flow.spec.ts',
+    );
     expect(() => h.permissions.checkFilePath(path.join(artifacts, 'index.ts'), 'write')).toThrow(
       /File type not allowed/,
     );
@@ -156,7 +163,13 @@ describe('security policies (real browser)', () => {
     expect(pass.passed).toBe(true);
     expect(JSON.stringify(pass)).not.toContain('hunter2');
     const attr = await engine.check(
-      { type: 'attribute', attribute: 'value', target: { label: 'Password' }, contains: 'hunter', timeout: 300 },
+      {
+        type: 'attribute',
+        attribute: 'value',
+        target: { label: 'Password' },
+        contains: 'hunter',
+        timeout: 300,
+      },
       { session: 'inject' },
     );
     expect(attr.passed).toBe(true);
@@ -251,13 +264,15 @@ describe('security policies (real browser)', () => {
 
     it('denies destructive select options, checkboxes and drop targets', async () => {
       await open();
-      await expect(hd.actions.selectOption({ label: 'Bulk action' }, ['Delete selected'], ctx)).rejects.toMatchObject(
-        denied,
-      );
+      await expect(
+        hd.actions.selectOption({ label: 'Bulk action' }, ['Delete selected'], ctx),
+      ).rejects.toMatchObject(denied);
       await expect(
         hd.actions.fillForm([{ target: { label: 'Bulk action' }, value: 'Delete selected' }], ctx),
       ).rejects.toMatchObject(denied);
-      await expect(hd.actions.setChecked({ label: 'Remove my data' }, true, ctx)).rejects.toMatchObject(denied);
+      await expect(hd.actions.setChecked({ label: 'Remove my data' }, true, ctx)).rejects.toMatchObject(
+        denied,
+      );
       await expect(
         hd.actions.fillForm([{ target: { label: 'Remove my data' }, value: true }], ctx),
       ).rejects.toMatchObject(denied);
@@ -310,7 +325,10 @@ describe('security policies (real browser)', () => {
         await ha.actions.press('Enter', { role: 'button', name: 'Delete account' }, ctx);
         expect(await ha.session('gate').raw.page().page.locator('#log').textContent()).toBe('button;');
         await ha.actions.fill({ label: 'Reason' }, 'moving', { submit: true }, ctx);
-        await ha.session('gate').raw.page().page.waitForURL(/\/policy-gate\/submitted/);
+        await ha
+          .session('gate')
+          .raw.page()
+          .page.waitForURL(/\/policy-gate\/submitted/);
         // One prompt per action; for fill+submit the title names the effective destructive target (the
         // form's default submit button), not the harmless "Reason" field the agent addressed.
         expect(prompts).toEqual(['Press Enter on "Delete account"', 'Submit "Delete account permanently"']);

@@ -91,8 +91,7 @@ export function probeActivation(el: Element | null, mode: 'enter' | 'space'): Pr
   } else {
     picked.push({ node: e, via: 'self' });
     if (isField && tag !== 'textarea') {
-      const form =
-        (e as HTMLInputElement).form || (e.closest('form') as HTMLFormElement | null) || undefined;
+      const form = (e as HTMLInputElement).form || (e.closest('form') as HTMLFormElement | null) || undefined;
       if (form) {
         // Implicit submission uses the form's first enabled submit button (its "default button").
         const submitter = Array.from(form.elements).find((x) => {
@@ -144,7 +143,9 @@ export function probeActivation(el: Element | null, mode: 'enter' | 'space'): Pr
       if (ph) parts.push(ph);
     }
     const name = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 300);
-    const role = n.getAttribute('role') || (t === 'a' ? 'link' : t === 'input' ? `input[${n.getAttribute('type') || 'text'}]` : t);
+    const role =
+      n.getAttribute('role') ||
+      (t === 'a' ? 'link' : t === 'input' ? `input[${n.getAttribute('type') || 'text'}]` : t);
     return { name, role, via: p.via };
   });
 }
@@ -169,7 +170,9 @@ export class PolicyGate {
     const name = clip(hit.name);
     const where = safeUrlForLog(req.url);
     // The element the agent addressed (e.g. the text field Enter is pressed in), when it differs from the hit.
-    const origin = req.candidates.find((c) => c !== hit && (c.via === 'target' || c.via === 'focused') && c.name);
+    const origin = req.candidates.find(
+      (c) => c !== hit && (c.via === 'target' || c.via === 'focused') && c.name,
+    );
     const from = origin ? ` from "${clip(origin.name)}"` : '';
     const how =
       hit.via === 'submit'
