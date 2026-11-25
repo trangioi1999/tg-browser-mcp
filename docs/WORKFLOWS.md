@@ -1,6 +1,6 @@
 # Workflow guide
 
-Workflows are declarative JSON, executed by the `WorkflowEngine` (`workflow_execute`, `test_execute`, SDK). Complete example: [examples/workflows/maker-checker.json](../examples/workflows/maker-checker.json) — tested end-to-end and converted into a passing Playwright test.
+Workflows are declarative JSON, executed by the `WorkflowEngine` (`workflow_execute`, `test_execute`, SDK). Complete example: [examples/workflows/maker-checker.json](../examples/workflows/maker-checker.json).
 
 ```json
 {
@@ -10,15 +10,16 @@ Workflows are declarative JSON, executed by the `WorkflowEngine` (`workflow_exec
   "steps": [
     { "id": "login", "session": "maker", "action": "navigate", "input": { "url": "${BASE_URL}/login" } },
     {
-      "id": "creds",
+      "id": "username",
       "session": "maker",
-      "action": "fill_form",
-      "input": {
-        "fields": [
-          { "label": "Username", "value": "maker" },
-          { "label": "Password", "value": "${secret.MAKER_PASSWORD}" }
-        ]
-      }
+      "action": "fill",
+      "input": { "label": "Username", "value": "maker" }
+    },
+    {
+      "id": "password",
+      "session": "maker",
+      "action": "fill",
+      "input": { "label": "Password", "value": "${secret.MAKER_PASSWORD}" }
     },
     { "id": "go", "session": "maker", "action": "click", "input": { "role": "button", "name": "Sign in" } },
     {
@@ -64,7 +65,7 @@ Workflows are declarative JSON, executed by the `WorkflowEngine` (`workflow_exec
 | `extract`                    | store text/value/attribute/url/title (+regex) in a variable                                                                                                                                             |
 | `assert`                     | visible, hidden, text, value, url, title, count, attribute, enabled, disabled, checked, no_console_errors, no_failed_requests (auto-retry until `timeout`, default 5s)                                  |
 
-Variables: workflow `variables` < run-time `variables`; `${secret.NAME}` reads `TG_SECRET_NAME` and is masked as `[secret]` everywhere.
+Variables: workflow `variables` < run-time `variables`; `${secret.NAME}` reads `TG_SECRET_NAME` and is tracked for masking. Secrets are allowed only in `fill.input.value`, `type.input.text`, and `fill_form.input.fields[].value`; URLs, targets (including form-field labels/selectors), assertions, extraction, conditions and variables cannot contain secret references. Model-supplied inline definitions through MCP tools (including `workflow_create`) require operator configuration `workflows.allowInlineSecrets: true` (default `false`). Trusted SDK callers and definitions loaded from disk may use secrets without this flag. Tool adapters mark inline execution with `source: "untrusted-inline"`; this option is never a model-facing tool argument. This P0 policy does not yet bind secrets to allowed origins.
 
 ## Execution semantics
 
@@ -85,3 +86,5 @@ test_execute names=["Approve flow"]   → Markdown + JUnit reports in <dataDir>/
 ```
 
 Generated specs use one `browser.newContext()` per session, semantic locators, `test.step` per workflow step, and read variables/secrets from env (`BASE_URL`, `TG_SECRET_*`).
+
+Retries use resolved action inputs. Submission, typing and clicks do not retry unless explicitly marked `idempotent: true`; high-impact target names never allow that override. Run checkpoints use a synced temporary file and atomic rename. Run listing skips corrupt records and logs a warning to stderr.

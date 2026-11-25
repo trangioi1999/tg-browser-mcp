@@ -1,3 +1,7 @@
+import { classifyAction } from '../harness/action-classes.js';
+import { SECRET_REFERENCE, isSecretValuePath } from './secret-policy.js';
+import { writeFileAtomic } from './atomic-write.js';
+import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { BrowserHarness } from '../harness/browser-harness.js';
@@ -8,7 +12,7 @@ import { assertSafeName, shortId, sleep, truncate } from '../shared/util.js';
 import { getLogger } from '../shared/logger.js';
 import { formatConsole, formatNetwork } from '../network/network-monitor.js';
 import { browserShortcut } from '../config/load-config.js';
-import { IDEMPOTENT_ACTIONS, type Workflow, type WorkflowStep } from './workflow-schema.js';
+import { type Workflow, type WorkflowStep } from './workflow-schema.js';
 import { assertValidWorkflow } from './workflow-validator.js';
 import type { Target } from '../harness/target.js';
 
@@ -51,11 +55,50 @@ export interface RunRecord {
 }
 
 export interface ExecuteOptions {
+  /** Set by adapters for model-supplied definitions; SDK callers are trusted by default.
+   * This is not a workflow field and must never be exposed as a tool argument. */
+  source?: 'trusted' | 'untrusted-inline';
   variables?: Record<string, string | number | boolean>;
   /** Skip steps before this id (resume from a checkpoint; sessions must already be in the right state). */
   startAt?: string;
   signal?: AbortSignal;
 }
+
+const StoredRunSchema = z.object({
+  runId: z.string().regex(/^[A-Za-z0-9_.-]+$/),
+  workflow: z.string(),
+  project: z.string(),
+  status: z.enum(['running', 'passed', 'failed', 'cancelled']),
+  startedAt: z.string().datetime(),
+  durationMs: z.number().optional(),
+  variables: z.record(z.string(), z.string()),
+  reports: z.array(z.string()).optional(),
+  finishedAt: z.string().datetime().optional(),
+  failure: z
+    .object({
+      stepId: z.string(),
+      code: z.string(),
+      message: z.string(),
+      url: z.string().optional(),
+      screenshot: z.string().optional(),
+      console: z.string().optional(),
+      network: z.string().optional(),
+    })
+    .optional(),
+  steps: z.array(
+    z.object({
+      id: z.string(),
+      action: z.string(),
+      session: z.string(),
+      status: z.enum(['passed', 'failed', 'skipped', 'pending', 'running']),
+      attempts: z.number(),
+      durationMs: z.number(),
+      message: z.string(),
+      name: z.string().optional(),
+      error: z.object({ code: z.string(), message: z.string() }).optional(),
+    }),
+  ),
+});
 
 const VAR_RE = /\$\{([A-Za-z_][A-Za-z0-9_.]*)\}/g;
 
@@ -99,7 +142,8 @@ export class WorkflowEngine {
       throw new TgError('WORKFLOW_NOT_FOUND', `Workflow "${name}" not found`, {
         suggestion: 'Call workflow_list.',
       });
-    return assertValidWorkflow(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const wf = assertValidWorkflow(JSON.parse(fs.readFileSync(file, 'utf8')));
+    return wf;
   }
 
   listDefinitions(): Array<{ name: string; steps: number; sessions: string[]; file: string }> {
@@ -129,9 +173,7 @@ export class WorkflowEngine {
   private checkpoint(r: RunRecord): void {
     try {
       fs.mkdirSync(this.runsDir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(this.runsDir, `${r.runId}.json`), JSON.stringify(r, null, 2), {
-        mode: 0o600,
-      });
+      writeFileAtomic(path.join(this.runsDir, `${r.runId}.json`), JSON.stringify(r, null, 2));
     } catch (e) {
       getLogger().warn({ err: (e as Error).message }, 'failed to write workflow checkpoint');
     }
@@ -162,7 +204,16 @@ export class WorkflowEngine {
       return [];
     }
     return files
-      .map((f) => JSON.parse(fs.readFileSync(path.join(this.runsDir, f), 'utf8')) as RunRecord)
+      .flatMap((f) => {
+        try {
+          const run = StoredRunSchema.parse(JSON.parse(fs.readFileSync(path.join(this.runsDir, f), 'utf8')));
+          if (f !== `${run.runId}.json`) throw new Error('Run id does not match filename');
+          return [run];
+        } catch {
+          getLogger().warn({ file: f }, 'skipping unreadable workflow run');
+          return [];
+        }
+      })
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, limit)
       .map(({ runId, workflow, status, startedAt, durationMs }) => ({
@@ -185,7 +236,8 @@ export class WorkflowEngine {
 
   /** Starts a run and returns immediately with its id; await `wait(runId)` for the result. */
   start(input: unknown, opts: ExecuteOptions = {}): { runId: string; promise: Promise<RunRecord> } {
-    const wf = assertValidWorkflow(input, Object.keys(opts.variables ?? {}));
+    const allowSecrets = opts.source !== 'untrusted-inline' || this.h.config.workflows.allowInlineSecrets;
+    const wf = assertValidWorkflow(input, Object.keys(opts.variables ?? {}), { allowSecrets });
     const controller = new AbortController();
     if (opts.signal)
       opts.signal.addEventListener('abort', () => controller.abort(opts.signal!.reason), { once: true });
@@ -261,6 +313,7 @@ export class WorkflowEngine {
           this.h.events.emit('workflow.step', { runId: record.runId, stepId: step.id, status: 'skipped' });
           continue;
         }
+        if (step.when) interpolate(step.when, vars, secretValues);
         if (step.when && !evalCondition(step.when, vars)) {
           sr.status = 'skipped';
           sr.message = `condition false: ${step.when}`;
@@ -269,13 +322,16 @@ export class WorkflowEngine {
         }
         sr.status = 'running';
         const st = Date.now();
-        const retryable = IDEMPOTENT_ACTIONS.has(step.action) || step.idempotent === true;
+        const resolvedInput = interpolateActionInput(step.action, step.input, vars, secretValues);
+        const actionClass = classifyAction(step.action, resolvedInput);
+        const retryable =
+          actionClass !== 'high-impact' && (actionClass !== 'non-idempotent' || step.idempotent === true);
         const maxAttempts = 1 + (retryable ? (step.retry?.attempts ?? 0) : 0);
         let lastErr: TgError | undefined;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           sr.attempts = attempt;
           try {
-            const input = interpolate(step.input, vars, secretValues) as Record<string, unknown>;
+            const input = resolvedInput;
             const out = await withTimeout(
               this.runStep(step, input, vars, secretValues, signal),
               step.timeout ?? wf.defaults.timeout ?? this.h.config.browser.timeout * 2,
@@ -545,12 +601,46 @@ function hasAny(input: Record<string, unknown>): boolean {
   );
 }
 
+/** Resolve inputs using the same exact destination allowlist as static validation. */
+export function interpolateActionInput(
+  action: string,
+  input: Record<string, unknown>,
+  vars: Record<string, string>,
+  secrets: Set<string>,
+): Record<string, unknown> {
+  function visit(value: unknown, parts: string[]): unknown {
+    if (Array.isArray(value)) return value.map((v, i) => visit(v, [...parts, String(i)]));
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value).map(([k, v]) => {
+          if (SECRET_REFERENCE.test(k))
+            throw new TgError('WORKFLOW_INVALID', 'Secrets are forbidden in property names');
+          return [k, visit(v, [...parts, k])];
+        }),
+      );
+    return interpolate(value, vars, secrets, isSecretValuePath(action, parts));
+  }
+  return visit(input, []) as Record<string, unknown>;
+}
+
 /** Resolves ${var} and ${secret.NAME} (from env TG_SECRET_NAME). Secret values are tracked for masking. */
-export function interpolate(v: unknown, vars: Record<string, string>, secrets: Set<string>): unknown {
+export function interpolate(
+  v: unknown,
+  vars: Record<string, string>,
+  secrets: Set<string>,
+  allowSecrets = false,
+): unknown {
   if (typeof v === 'string') {
     return v.replace(VAR_RE, (_m, name: string) => {
-      if (name.startsWith('secret.')) {
-        const envName = `TG_SECRET_${name.slice(7).toUpperCase()}`;
+      if (SECRET_REFERENCE.test('${' + name + '}')) {
+        if (!allowSecrets)
+          throw new TgError(
+            'WORKFLOW_INVALID',
+            'Secrets are only allowed in fill.value/type.text/fill_form field values',
+          );
+        const envName = name.startsWith('secret.')
+          ? `TG_SECRET_${name.slice(7).toUpperCase()}`
+          : name.replace(/^env\./, '');
         const val = process.env[envName];
         if (val === undefined)
           throw new TgError('WORKFLOW_FAILED', `Secret ${name} is not set (env ${envName})`);
@@ -559,12 +649,16 @@ export function interpolate(v: unknown, vars: Record<string, string>, secrets: S
       }
       const val = vars[name];
       if (val === undefined) throw new TgError('WORKFLOW_FAILED', `Variable \${${name}} is not defined`);
+      if (SECRET_REFERENCE.test(val) || (!allowSecrets && [...secrets].some((s) => s && val.includes(s))))
+        throw new TgError('WORKFLOW_INVALID', 'Secret values cannot be used at this destination');
       return val;
     });
   }
-  if (Array.isArray(v)) return v.map((x) => interpolate(x, vars, secrets));
+  if (Array.isArray(v)) return v.map((x) => interpolate(x, vars, secrets, allowSecrets));
   if (v && typeof v === 'object')
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, interpolate(x, vars, secrets)]));
+    return Object.fromEntries(
+      Object.entries(v).map(([k, x]) => [k, interpolate(x, vars, secrets, allowSecrets)]),
+    );
   return v;
 }
 

@@ -1,6 +1,7 @@
+import { crossCheckDescription, type ResolveIntent } from '../snapshot/guard.js';
 import { z } from 'zod';
 import type { ElementHandle, Frame, Locator } from 'playwright';
-import { installScriptSource, type ElementDescription } from '../snapshot/injected.js';
+import { installScriptSource, snapshotAccessKey, type ElementDescription } from '../snapshot/injected.js';
 import type { PageState } from '../session/session.js';
 import { TgError, toTgError } from '../shared/errors.js';
 
@@ -72,9 +73,14 @@ function buildLocator(frame: Frame, t: Target): Locator {
 }
 
 /** Resolves a Target into a live element. Waits up to `timeout` for semantic locators to appear. */
-export async function resolveTarget(ps: PageState, t: Target, timeout: number): Promise<Resolved> {
+export async function resolveTarget(
+  ps: PageState,
+  t: Target,
+  timeout: number,
+  intent: ResolveIntent = 'action',
+): Promise<Resolved> {
   if (t.ref) {
-    const { handle, entry, desc } = await ps.refs.resolve(t.ref);
+    const { handle, entry, desc } = await ps.refs.resolve(t.ref, intent);
     return { kind: 'handle', handle, desc, frame: entry.frame, ref: t.ref };
   }
   const frame = ps.frame();
@@ -102,14 +108,20 @@ export async function resolveTarget(ps: PageState, t: Target, timeout: number): 
         suggestion: 'Use a ref from browser_snapshot, set exact=true, or pass nth.',
       });
   }
-  await frame.evaluate(installScriptSource()).catch(() => undefined);
-  const desc = await loc
-    .evaluate((el) =>
-      (window as unknown as { __tgSnap: { describe(e: Element): ElementDescription } }).__tgSnap.describe(el),
-    )
-    .catch(
-      () => ({ role: 'generic', name: '', tag: '', connected: true, editable: false }) as ElementDescription,
-    );
+  try {
+    await frame.evaluate(installScriptSource());
+  } catch (cause) {
+    throw new TgError('TARGET_CHANGED', 'Snapshot engine installation could not be verified', { cause });
+  }
+  const raw = await loc.evaluate(
+    (el, key) =>
+      (window as unknown as { __tgSnap: { describe(e: Element, key: string): string } }).__tgSnap.describe(
+        el,
+        key,
+      ),
+    snapshotAccessKey,
+  );
+  const desc = await crossCheckDescription(loc, JSON.parse(raw) as ElementDescription, frame);
   return { kind: 'locator', locator: loc, desc, frame };
 }
 

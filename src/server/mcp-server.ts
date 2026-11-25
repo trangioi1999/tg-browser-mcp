@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { TgConfig } from '../config/schema.js';
 import { BrowserHarness } from '../harness/browser-harness.js';
+import type { Session } from '../session/session.js';
 import { WorkflowEngine } from '../workflow/workflow-engine.js';
 import { WorkflowRecorder } from '../workflow/workflow-recorder.js';
 import { ALL_TOOLS } from '../tools/index.js';
@@ -105,6 +106,10 @@ export function createMcpServer(
         const ctx: ToolContext = { harness, workflows, recorder, config, signal: extra.signal };
         let status: 'ok' | 'error' | 'denied' = 'ok';
         let code: string | undefined;
+        // D20: attribute the call to the session it targets (resolved before the call, e.g. for
+        // session_delete, and again after it, e.g. for session_create), not the active session.
+        let input: Record<string, unknown> = args;
+        let targeted: AuditSession | undefined = auditSession(tool, input, harness);
         try {
           const parsed = z.object(tool.input).safeParse(args);
           if (!parsed.success) {
@@ -113,6 +118,8 @@ export function createMcpServer(
               parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
             );
           }
+          input = parsed.data as Record<string, unknown>;
+          targeted = auditSession(tool, input, harness) ?? targeted;
           const out = await withTimeout(tool.handler(parsed.data as never, ctx), tool.timeoutMs, tool.name);
           if (out.isError) status = 'error';
           return out;
@@ -133,7 +140,9 @@ export function createMcpServer(
           return errorOutput(err);
         } finally {
           const durationMs = Date.now() - t0;
-          const session = harness.sessions.active;
+          const after = auditSession(tool, input, harness);
+          const attributed = after?.session ? after : (targeted ?? after);
+          const session = attributed?.session;
           const target =
             typeof args.ref === 'string'
               ? `ref=${args.ref}`
@@ -146,7 +155,8 @@ export function createMcpServer(
             tool: tool.name,
             risk: tool.risk,
             ...(session ? { sessionId: session.id } : {}),
-            project: config.project,
+            ...(attributed?.name ? { session: attributed.name } : {}),
+            project: session?.project ?? attributed?.project ?? config.project,
             ...(opts.agentId ? { agentId: opts.agentId } : {}),
             status,
             durationMs,
@@ -156,7 +166,7 @@ export function createMcpServer(
           log[status === 'ok' ? 'info' : 'warn'](
             {
               tool: tool.name,
-              session: session?.name,
+              session: session?.name ?? attributed?.name,
               durationMs,
               status,
               code,
@@ -245,6 +255,48 @@ export function createMcpServer(
       await harness.close();
       await server.close().catch(() => undefined);
     },
+  };
+}
+
+/** The session a tool call targets, for audit attribution (D20). */
+export interface AuditSession {
+  /** Requested session name (also set when the session does not exist). */
+  name?: string;
+  project?: string;
+  session?: Session;
+}
+
+/**
+ * Resolves the session a tool call targets: the `session` argument of page/browser tools, or the
+ * `name`/`project` arguments of `session_*` tools; tools that address a session but omit it act on
+ * the active session. Tools without a session parameter (workflows, diagnostics) are not attributed
+ * to any session.
+ */
+export function auditSession(
+  tool: Pick<ToolDef, 'name' | 'input'>,
+  args: Record<string, unknown>,
+  harness: Pick<BrowserHarness, 'sessions'>,
+): AuditSession | undefined {
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  let name: string | undefined;
+  let project: string | undefined;
+  if (tool.name.startsWith('session_')) {
+    if (!('name' in tool.input)) return undefined;
+    name = str(args.name);
+    project = str(args.project);
+  } else if ('session' in tool.input) {
+    name = str(args.session);
+    project = str(args.project);
+  } else return undefined;
+  if (!name) {
+    const active = harness.sessions.active;
+    return active ? { name: active.name, project: active.project, session: active } : undefined;
+  }
+  const found = harness.sessions.find(name, project);
+  return {
+    name,
+    ...(found || project ? { project: found?.project ?? project } : {}),
+    ...(found ? { session: found } : {}),
   };
 }
 

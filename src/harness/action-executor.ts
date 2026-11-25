@@ -3,7 +3,15 @@ import path from 'node:path';
 import type { TgConfig } from '../config/schema.js';
 import type { DomainPolicy } from '../security/domain-policy.js';
 import { safeUrlForLog } from '../security/domain-policy.js';
-import type { PermissionManager } from '../security/permission-manager.js';
+import { WRITE_EXTENSIONS, type PermissionManager } from '../security/permission-manager.js';
+import {
+  PolicyGate,
+  keyActivation,
+  probeActivation,
+  textActivations,
+  type KeyActivation,
+  type PolicyCandidate,
+} from '../security/policy-gate.js';
 import type { DataRedactor } from '../security/data-redactor.js';
 import type { TypedEmitter } from '../shared/events.js';
 import type { SessionManager } from '../session/session-manager.js';
@@ -29,6 +37,8 @@ export type SnapshotMode = 'diff' | 'full' | 'none';
 
 export interface ActionContext {
   session?: string;
+  /** Project namespace of `session` (default: the configured project). */
+  project?: string;
   pageId?: string;
   snapshot?: SnapshotMode;
   correlationId?: string;
@@ -69,6 +79,7 @@ const SETTLE_MAX_MS = 2000;
 
 export class ActionExecutor {
   onRecorded: ((a: RecordedAction) => void) | undefined;
+  private readonly gate: PolicyGate;
 
   constructor(
     private readonly cfg: TgConfig,
@@ -77,14 +88,16 @@ export class ActionExecutor {
     private readonly permissions: PermissionManager,
     private readonly redactor: DataRedactor,
     private readonly events: TypedEmitter,
-  ) {}
+  ) {
+    this.gate = new PolicyGate(permissions);
+  }
 
   get artifactsDir(): string {
     return path.join(this.cfg.dataDir, 'artifacts');
   }
 
-  private async sessionFor(name?: string): Promise<Session> {
-    return name ? this.sessions.get(name) : this.sessions.ensureActive();
+  private async sessionFor(name?: string, project?: string): Promise<Session> {
+    return name ? this.sessions.get(name, project) : this.sessions.ensureActive();
   }
 
   private async ensurePage(s: Session, pageId?: string): Promise<PageState> {
@@ -206,7 +219,7 @@ export class ActionExecutor {
     ) => Promise<{ message: string; extra?: Partial<ActionResult>; mode?: SnapshotMode }>,
   ): Promise<ActionResult> {
     const correlationId = ctx.correlationId ?? shortId('act');
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     const t0 = Date.now();
     const startSeq = s.monitor.lastSeq;
@@ -291,13 +304,77 @@ export class ActionExecutor {
     });
   }
 
-  private isSensitiveField(desc: ElementDescription): boolean {
+  /** Node-side sensitivity check for a resolved element (password inputs, sensitive names/labels/ids). */
+  isSensitiveField(desc: ElementDescription): boolean {
     return (
       desc.inputType === 'password' ||
       this.redactor.isSensitiveKey(desc.name || '') ||
       this.redactor.isSensitiveKey(desc.label || '') ||
       this.redactor.isSensitiveKey(desc.id || '')
     );
+  }
+
+  // ───────────────────────── Policy gate (S-01) ─────────────────────────
+
+  private static self(r: Resolved): PolicyCandidate {
+    return { name: r.desc.name, role: r.desc.role, via: 'target' };
+  }
+
+  /**
+   * Elements a key activation would trigger: on the resolved target, or on the focused element of every
+   * frame for page-level keys (the keyboard goes to whichever frame has focus).
+   */
+  private async activationTargets(
+    ps: PageState,
+    r: Resolved | undefined,
+    mode: KeyActivation,
+  ): Promise<PolicyCandidate[]> {
+    const out: PolicyCandidate[] = [];
+    const push = (list: Array<{ name: string; role: string; via: 'self' | 'submit' | 'form' }>) => {
+      for (const p of list)
+        out.push({ name: p.name, role: p.role, via: p.via === 'self' ? (r ? 'target' : 'focused') : p.via });
+    };
+    if (r) {
+      const probed = await (r.kind === 'handle'
+        ? r.handle.evaluate(probeActivation, mode)
+        : r.locator.evaluate(probeActivation, mode, { timeout: this.timeout() })
+      ).catch(() => undefined);
+      // The engine-provided accessible name is checked too (Enter always, Space when it activates).
+      if (mode === 'enter' || !probed || probed.some((p) => p.via === 'self')) out.push(ActionExecutor.self(r));
+      if (probed) push(probed);
+      return out;
+    }
+    for (const f of ps.page.frames()) {
+      const h = await f
+        .evaluateHandle(() => {
+          let e = document.activeElement;
+          while (e && e.shadowRoot && e.shadowRoot.activeElement) e = e.shadowRoot.activeElement;
+          return e;
+        })
+        .catch(() => undefined);
+      const el = h?.asElement();
+      if (!el) {
+        await h?.dispose().catch(() => undefined);
+        continue;
+      }
+      const probed = await el.evaluate(probeActivation, mode).catch(() => undefined);
+      await el.dispose().catch(() => undefined);
+      if (probed) push(probed);
+    }
+    return out;
+  }
+
+  /** Gates key activations (Enter/Space, typed newlines/spaces, submit) on the effective target. */
+  private async gateActivations(
+    ps: PageState,
+    r: Resolved | undefined,
+    modes: KeyActivation[],
+    verb: string,
+  ): Promise<void> {
+    for (const mode of [...new Set(modes)]) {
+      const candidates = await this.activationTargets(ps, r, mode);
+      await this.gate.enforce({ verb, url: ps.page.url(), candidates });
+    }
   }
 
   // ───────────────────────── Navigation ─────────────────────────
@@ -462,13 +539,7 @@ export class ActionExecutor {
     const action = opts.doubleClick ? 'double_click' : 'click';
     return this.run(ctx, action, describeTarget(target), async (s, ps) => {
       const r = await resolveTarget(ps, target, this.timeout());
-      if (this.permissions.isDestructiveName(r.desc.name)) {
-        await this.permissions.requireApproval(
-          'destructive',
-          `Click "${r.desc.name}"`,
-          `The agent wants to click ${r.desc.role} "${r.desc.name}" on ${safeUrlForLog(ps.page.url())}. This looks like a destructive action.`,
-        );
-      }
+      await this.gate.enforce({ verb: 'Click', url: ps.page.url(), candidates: [ActionExecutor.self(r)] });
       const o = {
         timeout: this.timeout(),
         ...(opts.button ? { button: opts.button } : {}),
@@ -500,11 +571,12 @@ export class ActionExecutor {
     ctx: ActionContext = {},
   ): Promise<ActionResult> {
     return this.run(ctx, 'fill', describeTarget(target), async (s, ps) => {
-      const r = await resolveTarget(ps, target, this.timeout());
+      const r = await resolveTarget(ps, target, this.timeout(), opts.submit ? 'action' : 'input');
       const sensitive = this.isSensitiveField(r.desc);
       const el = r.kind === 'handle' ? r.handle : r.locator;
       if (r.desc.native === 'select')
         throw new TgError('INVALID_ARGUMENT', 'Target is a <select>; use browser_select_option');
+      if (opts.submit) await this.gateActivations(ps, r, ['enter'], 'Submit');
       await el.fill(value, { timeout: this.timeout() });
       if (opts.submit) await el.press('Enter', { timeout: this.timeout() });
       this.record(
@@ -533,17 +605,27 @@ export class ActionExecutor {
         const el = r.kind === 'handle' ? r.handle : r.locator;
         const sensitive = this.isSensitiveField(r.desc);
         if (typeof f.value === 'boolean') {
+          await this.gate.enforce({
+            verb: f.value ? 'Check' : 'Uncheck',
+            url: ps.page.url(),
+            candidates: [ActionExecutor.self(r)],
+          });
           if (f.value) await el.check({ timeout: this.timeout() });
           else await el.uncheck({ timeout: this.timeout() });
           this.record(s, f.value ? 'check' : 'uncheck', r, {}, ps.page.url());
-        } else if (r.desc.native === 'select') {
-          await el
-            .selectOption({ label: f.value }, { timeout: this.timeout() })
-            .catch(() => el.selectOption(f.value as string, { timeout: this.timeout() }));
-          this.record(s, 'select', r, { values: [f.value] }, ps.page.url());
-        } else if (r.desc.role === 'combobox' && !r.desc.editable) {
-          await selectCustomOption(ps, r, [f.value], this.timeout());
-          this.record(s, 'select', r, { values: [f.value] }, ps.page.url());
+        } else if (r.desc.native === 'select' || (r.desc.role === 'combobox' && !r.desc.editable)) {
+          const value = f.value;
+          await this.gate.enforce({
+            verb: 'Select',
+            url: ps.page.url(),
+            candidates: [ActionExecutor.self(r), { name: value, via: 'option' }],
+          });
+          if (r.desc.native === 'select')
+            await el
+              .selectOption({ label: value }, { timeout: this.timeout() })
+              .catch(() => el.selectOption(value, { timeout: this.timeout() }));
+          else await selectCustomOption(ps, r, [value], this.timeout());
+          this.record(s, 'select', r, { values: [value] }, ps.page.url());
         } else {
           await el.fill(f.value, { timeout: this.timeout() });
           this.record(s, 'fill', r, { value: f.value }, ps.page.url(), sensitive);
@@ -563,8 +645,11 @@ export class ActionExecutor {
     return this.run(ctx, 'type', target ? describeTarget(target) : 'focused element', async (s, ps) => {
       let r: Resolved | undefined;
       const delay = Math.min(opts.delayMs ?? 0, 500);
-      if (target && hasTarget(target)) {
-        r = await resolveTarget(ps, target, this.timeout());
+      if (target && hasTarget(target)) r = await resolveTarget(ps, target, this.timeout(), opts.submit ? 'action' : 'input');
+      const modes = textActivations(text);
+      if (opts.submit) modes.push('enter');
+      if (modes.length) await this.gateActivations(ps, r, modes, opts.submit ? 'Submit' : 'Type into');
+      if (r) {
         if (r.kind === 'handle') {
           await r.handle.focus();
           await ps.page.keyboard.type(text, { delay });
@@ -585,10 +670,11 @@ export class ActionExecutor {
       );
     return this.run(ctx, 'press_key', target ? describeTarget(target) : undefined, async (s, ps) => {
       let r: Resolved | undefined;
-      if (target && hasTarget(target)) {
-        r = await resolveTarget(ps, target, this.timeout());
-        await (r.kind === 'handle' ? r.handle : r.locator).press(key, { timeout: this.timeout() });
-      } else await ps.page.keyboard.press(key);
+      if (target && hasTarget(target)) r = await resolveTarget(ps, target, this.timeout());
+      const mode = keyActivation(key);
+      if (mode) await this.gateActivations(ps, r, [mode], `Press ${key} on`);
+      if (r) await (r.kind === 'handle' ? r.handle : r.locator).press(key, { timeout: this.timeout() });
+      else await ps.page.keyboard.press(key);
       this.record(s, 'press', r, { key }, ps.page.url());
       return { message: `Pressed ${key}` };
     });
@@ -597,6 +683,11 @@ export class ActionExecutor {
   async selectOption(target: Target, values: string[], ctx: ActionContext = {}): Promise<ActionResult> {
     return this.run(ctx, 'select_option', describeTarget(target), async (s, ps) => {
       const r = await resolveTarget(ps, target, this.timeout());
+      await this.gate.enforce({
+        verb: 'Select',
+        url: ps.page.url(),
+        candidates: [ActionExecutor.self(r), ...values.map((v): PolicyCandidate => ({ name: v, via: 'option' }))],
+      });
       let chosen: string[];
       if (r.desc.native === 'select') {
         const el = r.kind === 'handle' ? r.handle : r.locator;
@@ -623,6 +714,11 @@ export class ActionExecutor {
   async setChecked(target: Target, checked: boolean, ctx: ActionContext = {}): Promise<ActionResult> {
     return this.run(ctx, checked ? 'check' : 'uncheck', describeTarget(target), async (s, ps) => {
       const r = await resolveTarget(ps, target, this.timeout());
+      await this.gate.enforce({
+        verb: checked ? 'Check' : 'Uncheck',
+        url: ps.page.url(),
+        candidates: [ActionExecutor.self(r)],
+      });
       const el = r.kind === 'handle' ? r.handle : r.locator;
       if (checked) await el.check({ timeout: this.timeout() });
       else await el.uncheck({ timeout: this.timeout() });
@@ -635,6 +731,11 @@ export class ActionExecutor {
     return this.run(ctx, 'drag', `${describeTarget(source)} → ${describeTarget(dest)}`, async (s, ps) => {
       const a = await resolveTarget(ps, source, this.timeout());
       const b = await resolveTarget(ps, dest, this.timeout());
+      await this.gate.enforce({
+        verb: 'Drag',
+        url: ps.page.url(),
+        candidates: [ActionExecutor.self(a), { name: b.desc.name, role: b.desc.role, via: 'destination' }],
+      });
       if (a.kind === 'locator' && b.kind === 'locator')
         await a.locator.dragTo(b.locator, { timeout: this.timeout() });
       else {
@@ -753,7 +854,7 @@ export class ActionExecutor {
     sessionId: string;
     pageId: string;
   }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     const snap = await captureSnapshot(ps.page, ps.refs, {
       ...this.snapshotOpts(),
@@ -794,7 +895,7 @@ export class ActionExecutor {
     pageId: string;
     sessionId: string;
   }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     const type = opts.format ?? 'jpeg';
     const shotOpts = {
@@ -814,7 +915,7 @@ export class ActionExecutor {
     let file: string | undefined;
     if (opts.path || opts.save || mode !== 'inline') {
       file = opts.path
-        ? this.permissions.checkFilePath(opts.path, 'write')
+        ? this.permissions.checkFilePath(opts.path, 'write', { extensions: WRITE_EXTENSIONS[type] })
         : path.join(this.artifactsDir, s.project, s.name, `screenshot-${Date.now()}.${type}`);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, buf);
@@ -841,12 +942,12 @@ export class ActionExecutor {
     opts: { maxChars?: number } = {},
     ctx: ActionContext = {},
   ): Promise<string> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     const max = Math.min(opts.maxChars ?? 4000, 50_000);
     let text: string;
     if (target && hasTarget(target)) {
-      const r = await resolveTarget(ps, target, this.timeout());
+      const r = await resolveTarget(ps, target, this.timeout(), 'read');
       text = await (r.kind === 'handle'
         ? r.handle.innerText()
         : r.locator.innerText({ timeout: this.timeout() }));
@@ -856,9 +957,9 @@ export class ActionExecutor {
   }
 
   async getElement(target: Target, ctx: ActionContext = {}): Promise<Record<string, unknown>> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const r = await resolveTarget(ps, target, this.timeout());
+    const r = await resolveTarget(ps, target, this.timeout(), 'read');
     const el = r.kind === 'handle' ? r.handle : r.locator;
     const [box, visible, enabled] = await Promise.all([
       el.boundingBox().catch(() => null),
@@ -878,9 +979,9 @@ export class ActionExecutor {
   }
 
   async inputValue(target: Target, ctx: ActionContext = {}): Promise<string> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const r = await resolveTarget(ps, target, this.timeout());
+    const r = await resolveTarget(ps, target, this.timeout(), 'read');
     const v =
       r.kind === 'handle'
         ? await r.handle.inputValue()
@@ -893,9 +994,9 @@ export class ActionExecutor {
     names: string[] | undefined,
     ctx: ActionContext = {},
   ): Promise<Record<string, string>> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
-    const r = await resolveTarget(ps, target, this.timeout());
+    const r = await resolveTarget(ps, target, this.timeout(), 'read');
     const attrFn = (n: Element): Record<string, string> =>
       Object.fromEntries(Array.from(n.attributes).map((a) => [a.name, a.value]));
     const attrs = r.kind === 'handle' ? await r.handle.evaluate(attrFn) : await r.locator.evaluate(attrFn);
@@ -911,15 +1012,15 @@ export class ActionExecutor {
   }
 
   async ariaTree(target: Target | undefined, ctx: ActionContext = {}): Promise<string> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     let yaml: string;
     if (target && hasTarget(target)) {
-      const r = await resolveTarget(ps, target, this.timeout());
+      const r = await resolveTarget(ps, target, this.timeout(), 'read');
       if (r.kind === 'locator') yaml = await r.locator.ariaSnapshot({ timeout: this.timeout() });
       else {
         const sel = suggestLocator(r.desc).target;
-        const rr = await resolveTarget(ps, sel, this.timeout());
+        const rr = await resolveTarget(ps, sel, this.timeout(), 'read');
         yaml = rr.kind === 'locator' ? await rr.locator.ariaSnapshot({ timeout: this.timeout() }) : '';
       }
     } else yaml = await ps.frame().locator('body').ariaSnapshot({ timeout: this.timeout() });
@@ -929,7 +1030,7 @@ export class ActionExecutor {
   async pageInfo(
     ctx: ActionContext = {},
   ): Promise<{ title: string; url: string; pageId: string; session: string }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     return {
       title: await ps.page.title(),
@@ -944,7 +1045,7 @@ export class ActionExecutor {
   async tabs(
     ctx: ActionContext = {},
   ): Promise<Array<{ pageId: string; url: string; title: string; active: boolean }>> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const info = await s.info();
     return info.pages.map((p) => ({
       pageId: p.id,
@@ -955,7 +1056,7 @@ export class ActionExecutor {
   }
 
   async tabCreate(url: string | undefined, ctx: ActionContext = {}): Promise<ActionResult> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     if (url) await this.policy.assertAllowed(url);
     const ps = await this.sessions.openPage(s);
     if (url) return this.navigate(url, { ...ctx, pageId: ps.id });
@@ -965,7 +1066,7 @@ export class ActionExecutor {
   }
 
   async tabSwitch(pageId: string, ctx: ActionContext = {}): Promise<ActionResult> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = s.page(pageId);
     s.activePageId = ps.id;
     await ps.page.bringToFront().catch(() => undefined);
@@ -978,7 +1079,7 @@ export class ActionExecutor {
     pageId: string | undefined,
     ctx: ActionContext = {},
   ): Promise<{ closed: string; activePageId: string | undefined }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = s.page(pageId);
     await ps.page.close();
     return { closed: ps.id, activePageId: s.activePageId };
@@ -987,7 +1088,7 @@ export class ActionExecutor {
   async frames(
     ctx: ActionContext = {},
   ): Promise<Array<{ index: number; name: string; url: string; active: boolean }>> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     const active = ps.frame();
     return ps.page
@@ -999,7 +1100,7 @@ export class ActionExecutor {
     sel: { index?: number; name?: string; url?: string; main?: boolean },
     ctx: ActionContext = {},
   ): Promise<{ index: number; url: string }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     const frames = ps.page.frames();
     let f = sel.main ? ps.page.mainFrame() : undefined;
@@ -1019,7 +1120,7 @@ export class ActionExecutor {
     height: number,
     ctx: ActionContext = {},
   ): Promise<{ width: number; height: number }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     await ps.page.setViewportSize({ width, height });
     return { width, height };
@@ -1028,7 +1129,7 @@ export class ActionExecutor {
   // ───────────────────────── Debugging ─────────────────────────
 
   async performance(ctx: ActionContext = {}): Promise<Record<string, unknown>> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const ps = await this.ensurePage(s, ctx.pageId);
     return ps.page.evaluate(async () => {
       const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
@@ -1074,7 +1175,7 @@ export class ActionExecutor {
   }
 
   async traceStart(ctx: ActionContext = {}): Promise<{ session: string }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     await s.context.tracing.start({ screenshots: true, snapshots: true, sources: false });
     return { session: s.name };
   }
@@ -1083,9 +1184,9 @@ export class ActionExecutor {
     filePath: string | undefined,
     ctx: ActionContext = {},
   ): Promise<{ path: string; bytes: number }> {
-    const s = await this.sessionFor(ctx.session);
+    const s = await this.sessionFor(ctx.session, ctx.project);
     const out = filePath
-      ? this.permissions.checkFilePath(filePath, 'write')
+      ? this.permissions.checkFilePath(filePath, 'write', { extensions: WRITE_EXTENSIONS.trace })
       : path.join(this.artifactsDir, s.project, s.name, `trace-${Date.now()}.zip`);
     fs.mkdirSync(path.dirname(out), { recursive: true });
     await s.context.tracing.stop({ path: out });

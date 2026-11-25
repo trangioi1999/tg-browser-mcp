@@ -6,7 +6,8 @@ coverage
 docs
 examples
 tests
-scripts
+scripts/*
+!scripts/copy-ui.mjs
 *.log
 .env
 .env.*

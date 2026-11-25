@@ -231,6 +231,51 @@ describe('browser harness (real browser)', () => {
   });
 });
 
+describe('custom combobox option matching (D18)', () => {
+  it('picks an exact or unique substring match and refuses ambiguous ones', async () => {
+    const s = await h.createSession({ name: 'combo' });
+    await s.navigate(`${base}/combobox-ambiguous`);
+    const combo = { role: 'combobox', name: 'Account' };
+    const page = s.raw.page().page;
+    // "Account" is contained in three options and matches none exactly: ambiguous, nothing is clicked.
+    await expect(s.select(combo, 'Account')).rejects.toMatchObject({
+      code: 'ELEMENT_AMBIGUOUS',
+      context: { candidates: ['Savings Account', 'Checking Account', 'Account Closure'] },
+    });
+    expect(await page.locator('#acct').textContent()).toBe('Choose…');
+    expect(await page.locator('#acct-list').isVisible()).toBe(false);
+    // Two options with the same text are ambiguous as well.
+    await expect(s.select(combo, 'Joint')).rejects.toMatchObject({ code: 'ELEMENT_AMBIGUOUS' });
+    expect(await page.locator('#acct').textContent()).toBe('Choose…');
+    // A unique substring and an exact (case-insensitive) match still work.
+    await s.select(combo, 'Checking');
+    expect(await page.locator('#acct').textContent()).toBe('Checking Account');
+    await s.select(combo, 'loan');
+    expect(await page.locator('#acct').textContent()).toBe('Loan');
+    await s.close();
+  });
+});
+
+describe('SDK sessions in non-default projects (D8)', () => {
+  it('act on the session of their own project, never a same-named session elsewhere', async () => {
+    const p2 = await h.createSession({ name: 'proj-user', project: 'p2' });
+    expect(p2.project).toBe('p2');
+    const r = await p2.navigate(`${base}/login`);
+    expect(r.pageState).toContain('Page: Login');
+    await p2.fill({ label: 'Username' }, 'maker');
+    expect((await p2.snapshot()).text).toContain('Page: Login');
+    const saved = await p2.save();
+    expect(saved.project).toBe('p2');
+    // A same-named session in the default project is a different session.
+    const dflt = await h.createSession({ name: 'proj-user' });
+    await dflt.navigate(`${base}/dynamic`);
+    expect(p2.raw.pages.get(p2.raw.activePageId!)!.page.url()).toContain('/login');
+    expect(h.session('proj-user', 'p2').raw.id).toBe(p2.raw.id);
+    await p2.close();
+    await dflt.close();
+  });
+});
+
 describe('labels bound to controls', () => {
   it('are not reported as separate clickable elements (cursor:pointer labels)', async () => {
     const s = await h.createSession({ name: 'labels' });

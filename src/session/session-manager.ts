@@ -1,3 +1,4 @@
+import { installScriptSource } from '../snapshot/injected.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { BrowserContext, BrowserContextOptions, Page } from 'playwright';
@@ -293,6 +294,7 @@ export class SessionManager {
     this.recordings.set(session.id, { retain: !!o.retainVideo, failed: false, videos: [] });
     monitor.attachContext(context);
     await this.installPolicy(context, monitor);
+    await context.addInitScript(installScriptSource());
     if (o.indicator) {
       const label = `TG Browser MCP · ${o.name}`;
       await context.addInitScript(
@@ -483,8 +485,9 @@ export class SessionManager {
 
   async save(
     nameOrId?: string,
+    project?: string,
   ): Promise<{ name: string; project: string; cookies: number; origins: number; savedAt: string }> {
-    const s = this.get(nameOrId);
+    const s = this.get(nameOrId, project);
     const state = await s.context.storageState({ indexedDB: true });
     const url = s.activePageId ? s.pages.get(s.activePageId)?.page.url() : undefined;
     const meta = this.store.save(s.project, s.name, state, {

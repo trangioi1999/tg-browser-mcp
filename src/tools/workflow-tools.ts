@@ -19,7 +19,8 @@ function resolveWorkflow(
   a: { name?: string | undefined; definition?: Record<string, unknown> | undefined },
   c: ToolContext,
 ): Workflow {
-  if (a.definition) return assertValidWorkflow(a.definition);
+  if (a.definition)
+    return assertValidWorkflow(a.definition, [], { allowSecrets: c.config.workflows.allowInlineSecrets });
   if (a.name) return c.workflows.loadDefinition(a.name);
   throw new TgError('INVALID_ARGUMENT', 'Provide name (saved workflow) or definition');
 }
@@ -37,7 +38,7 @@ export const workflowTools = [
     timeoutMs: 10_000,
     input: { definition: Definition },
     handler: async (a, c) => {
-      const r = validateWorkflow(a.definition);
+      const r = validateWorkflow(a.definition, [], { allowSecrets: c.config.workflows.allowInlineSecrets });
       if (!r.valid || !r.workflow) throw new TgError('WORKFLOW_INVALID', r.errors.join('; '));
       const file = c.workflows.saveDefinition(r.workflow);
       return text(
@@ -63,7 +64,9 @@ export const workflowTools = [
     handler: async (a, c) => {
       const def = a.definition ?? (a.name ? c.workflows.loadDefinition(a.name) : undefined);
       if (!def) throw new TgError('INVALID_ARGUMENT', 'Provide definition or name');
-      const r = validateWorkflow(def, a.variables);
+      const r = validateWorkflow(def, a.variables, {
+        allowSecrets: !a.definition || c.config.workflows.allowInlineSecrets,
+      });
       return text(
         [
           r.valid ? '✓ Valid' : '✗ Invalid',
@@ -123,6 +126,7 @@ export const workflowTools = [
     handler: async (a, c) => {
       const wf = resolveWorkflow(a, c);
       const { runId, promise } = c.workflows.start(wf, {
+        source: a.definition ? 'untrusted-inline' : 'trusted',
         ...(a.variables ? { variables: a.variables } : {}),
         ...(a.startAt ? { startAt: a.startAt } : {}),
         signal: c.signal,
@@ -272,14 +276,17 @@ export const testingTools = [
     input: { names: z.array(z.string()).optional(), definition: Definition.optional(), variables: Vars },
     handler: async (a, c) => {
       const wfs: Workflow[] = [
-        ...(a.definition ? [assertValidWorkflow(a.definition)] : []),
+        ...(a.definition
+          ? [assertValidWorkflow(a.definition, [], { allowSecrets: c.config.workflows.allowInlineSecrets })]
+          : []),
         ...(a.names ?? []).map((n) => c.workflows.loadDefinition(n)),
       ];
       if (!wfs.length) throw new TgError('INVALID_ARGUMENT', 'Provide names or definition');
       const runs: RunRecord[] = [];
-      for (const wf of wfs)
+      for (const [index, wf] of wfs.entries())
         runs.push(
           await c.workflows.execute(wf, {
+            source: a.definition && index === 0 ? 'untrusted-inline' : 'trusted',
             ...(a.variables ? { variables: a.variables } : {}),
             signal: c.signal,
           }),

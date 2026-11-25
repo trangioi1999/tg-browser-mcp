@@ -15,6 +15,22 @@ export interface AssertionResult {
   durationMs: number;
 }
 
+const REDACTED = '[REDACTED]';
+
+/** Masks the actual and expected values of a comparison on a sensitive field; keeps the verdict. */
+export function redactComparison(res: { passed: boolean; actual: string; expected?: string }): {
+  passed: boolean;
+  actual: string;
+  expected?: string;
+} {
+  const kind = res.expected?.match(/^(contains|non-empty)\b/)?.[1];
+  return {
+    passed: res.passed,
+    actual: REDACTED,
+    expected: kind === 'non-empty' ? 'non-empty' : kind ? `${kind} ${REDACTED}` : REDACTED,
+  };
+}
+
 /**
  * Web-first assertions with auto-retry until timeout (like Playwright's expect), implemented
  * without depending on @playwright/test so it works inside the MCP server and SDK.
@@ -163,10 +179,17 @@ export class AssertionEngine {
           const want = a.equals === undefined ? true : a.equals === true || a.equals === 'true';
           return { passed: c === want, expected: String(want), actual: String(c) };
         }
-        if (a.type === 'value') return this.compare(a, await el.inputValue());
+        // Values of password/sensitive fields never appear in results or messages (S-07). The decision is
+        // made Node-side from the element description, like ActionExecutor.inputValue.
+        const sensitive = this.actions.isSensitiveField(r.desc);
+        if (a.type === 'value') {
+          const res = this.compare(a, await el.inputValue());
+          return sensitive ? redactComparison(res) : res;
+        }
         if (a.type === 'attribute') {
           if (!a.attribute) throw new TgError('INVALID_ARGUMENT', 'attribute assertion requires "attribute"');
-          return this.compare(a, (await el.getAttribute(a.attribute)) ?? '');
+          const res = this.compare(a, (await el.getAttribute(a.attribute)) ?? '');
+          return sensitive && a.attribute.toLowerCase() === 'value' ? redactComparison(res) : res;
         }
         throw new TgError('INVALID_ARGUMENT', `Unknown assertion ${a.type}`);
       }

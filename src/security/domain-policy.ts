@@ -86,7 +86,8 @@ export function isPrivateIp(ip: string): boolean {
 }
 
 export function isMetadataHost(host: string): boolean {
-  const h = stripBrackets(host).toLowerCase();
+  const raw = stripBrackets(host).toLowerCase();
+  const h = net.isIPv6(raw) ? stripBrackets(new URL(`http://[${raw}]/`).hostname) : raw;
   const v4 = mappedIpv4(h);
   return METADATA_HOSTS.has(h) || (!!v4 && METADATA_HOSTS.has(v4));
 }
@@ -95,7 +96,7 @@ export function isMetadataHost(host: string): boolean {
  * Domain/network policy. Evaluated for navigations, redirects, popups and (optionally) every
  * sub-request, so a page cannot pivot the browser to internal targets (SSRF) or cloud metadata.
  *
- * DNS-rebinding defence: hostnames that are not explicitly allowlisted are resolved, and the
+ * DNS-rebinding defence: all otherwise permitted hostnames are resolved, and the
  * resolved addresses are checked against loopback/private/metadata rules. Results are cached
  * briefly; the browser performs its own resolution, so this narrows (but cannot fully close)
  * the TOCTOU window. Use `allowedDomains` in high-assurance setups.
@@ -115,7 +116,7 @@ export class DomainPolicy {
       });
   }
 
-  /** Synchronous checks that need no DNS. Returns undefined when DNS resolution is required. */
+  /** Synchronous checks; marks permitted hostnames for mandatory DNS checks. */
   checkStatic(rawUrl: string): PolicyDecision & { needsDns?: boolean; host?: string } {
     let url: URL;
     try {
@@ -149,9 +150,8 @@ export class DomainPolicy {
       }
     }
     if (isLoopback(host)) {
-      return this.cfg.allowLocalhost || explicitlyAllowed
-        ? { allowed: true }
-        : { allowed: false, reason: 'localhost access is disabled (security.allowLocalhost=false)' };
+      if (!this.cfg.allowLocalhost && !explicitlyAllowed)
+        return { allowed: false, reason: 'localhost access is disabled (security.allowLocalhost=false)' };
     }
     if (net.isIP(host)) {
       if (isPrivateIp(host) && !this.cfg.allowPrivateNetwork && !explicitlyAllowed) {
@@ -162,7 +162,6 @@ export class DomainPolicy {
       }
       return { allowed: true };
     }
-    if (explicitlyAllowed || this.cfg.allowPrivateNetwork) return { allowed: true };
     return { allowed: true, needsDns: true, host };
   }
 
@@ -171,12 +170,13 @@ export class DomainPolicy {
     if (!s.allowed || !s.needsDns || !s.host) return s.allowed ? { allowed: true } : s;
     const addrs = await this.resolve(s.host);
     if (!addrs) return { allowed: true }; // Unresolvable: let the browser surface the DNS error.
+    const explicitlyAllowed = this.cfg.allowedDomains.some((p) => matchHost(p, s.host!));
     for (const a of addrs) {
       if (isMetadataHost(a))
         return { allowed: false, reason: `${s.host} resolves to a cloud metadata address` };
-      if (isLoopback(a) && !this.cfg.allowLocalhost)
+      if (isLoopback(a) && !this.cfg.allowLocalhost && !explicitlyAllowed)
         return { allowed: false, reason: `${s.host} resolves to loopback` };
-      if (isPrivateIp(a)) {
+      if (isPrivateIp(a) && !this.cfg.allowPrivateNetwork && !explicitlyAllowed) {
         return {
           allowed: false,
           reason: `${s.host} resolves to private address ${a} (possible DNS rebinding / SSRF)`,

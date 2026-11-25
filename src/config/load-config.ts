@@ -144,9 +144,16 @@ function normalize(cfg: TgConfig): TgConfig {
   cfg.dataDir = expandHome(cfg.dataDir);
   cfg.browser.userDataDir = expandHome(cfg.browser.userDataDir);
   if (cfg.network.tls.caFile) cfg.network.tls.caFile = expandHome(cfg.network.tls.caFile);
-  cfg.security.fileAccess.allowedRoots = cfg.security.fileAccess.allowedRoots.map(expandHome);
-  if (cfg.security.fileAccess.allowedRoots.length === 0) {
-    cfg.security.fileAccess.allowedRoots = [process.cwd(), cfg.dataDir];
+  const fa = cfg.security.fileAccess;
+  fa.allowedRoots = fa.allowedRoots.map(expandHome);
+  if (fa.allowedRoots.length === 0) {
+    // Read roots (uploads).
+    fa.allowedRoots = [process.cwd(), cfg.dataDir];
+  }
+  fa.writeRoots = fa.writeRoots.map(expandHome);
+  if (fa.writeRoots.length === 0) {
+    // Write roots are separate from read roots: by default only the artifacts directory (S-08).
+    fa.writeRoots = [path.join(cfg.dataDir, 'artifacts')];
   }
   return cfg;
 }

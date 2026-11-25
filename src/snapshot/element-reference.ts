@@ -1,6 +1,7 @@
 import type { ElementHandle, Frame } from 'playwright';
 import { TgError } from '../shared/errors.js';
-import type { ElementDescription } from './injected.js';
+import { snapshotAccessKey, snapshotNonce, type ElementDescription, type RefGuard } from './injected.js';
+import { compareGuards, crossCheckDescription, type ResolveIntent } from './guard.js';
 
 export interface RefEntry {
   ref: string;
@@ -9,6 +10,7 @@ export interface RefEntry {
   role: string;
   name: string;
   snapshotId: number;
+  guard?: RefGuard;
 }
 
 /**
@@ -44,6 +46,7 @@ export class RefRegistry {
    */
   async resolve(
     ref: string,
+    intent: ResolveIntent = 'action',
   ): Promise<{ handle: ElementHandle<Element>; entry: RefEntry; desc: ElementDescription }> {
     if (!/^e\d+$/.test(ref))
       throw new TgError(
@@ -62,17 +65,22 @@ export class RefRegistry {
       throw new TgError('STALE_ELEMENT_REFERENCE', `Frame for ref ${ref} was detached`, { context: { ref } });
     const res = await entry.frame
       .evaluateHandle(
-        ([r, docId]) => {
+        ([r, docId, nonce, key]) => {
           const s = (
             window as unknown as {
-              __tgSnap?: { docId: string; get(r: string): Element | null; describe(e: Element): unknown };
+              __tgSnap?: {
+                nonce: string;
+                docId: string;
+                get(r: string, key: string): Element | null;
+                describe(e: Element, key: string): string;
+              };
             }
           ).__tgSnap;
-          if (!s || s.docId !== docId) return null;
-          const el = s.get(r);
-          return el ? { el, desc: s.describe(el) } : null;
+          if (!s || s.nonce !== nonce || s.docId !== docId) return null;
+          const el = s.get(r, key);
+          return el ? { el, desc: s.describe(el, key) } : null;
         },
-        [ref, entry.docId] as const,
+        [ref, entry.docId, snapshotNonce, snapshotAccessKey] as const,
       )
       .catch((e: unknown) => {
         throw new TgError('STALE_ELEMENT_REFERENCE', `Ref ${ref} cannot be resolved: page changed`, {
@@ -98,7 +106,7 @@ export class RefRegistry {
         { context: { ref, role: entry.role, name: entry.name } },
       );
     }
-    const desc = (await (await res.getProperty('desc')).jsonValue()) as ElementDescription;
+    const desc = JSON.parse(await res.evaluate((x) => x!.desc)) as ElementDescription;
     await res.dispose();
     // Role must match. Name may legitimately change (e.g. live counters), but a role change means the
     // ref now points at a different kind of element.
@@ -114,6 +122,15 @@ export class RefRegistry {
         { context: { ref } },
       );
     }
-    return { handle: el as ElementHandle<Element>, entry, desc };
+    try {
+      if (entry.guard && desc.guard) compareGuards(entry.guard, desc.guard, intent);
+      if (entry.guard && desc.guard && entry.guard.name !== desc.guard.name)
+        desc.warning = 'Target name changed since the snapshot; accepted for this intent.';
+      const checked = await crossCheckDescription(el as ElementHandle<Element>, desc, entry.frame);
+      return { handle: el as ElementHandle<Element>, entry, desc: checked };
+    } catch (error) {
+      await el.dispose();
+      throw error;
+    }
   }
 }
