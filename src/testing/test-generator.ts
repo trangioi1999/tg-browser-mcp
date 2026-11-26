@@ -37,9 +37,17 @@ function tpl(s: unknown): string {
 }
 
 function locatorExpr(page: string, t: Partial<Target>): string {
+  if (t.within) page = locatorExpr(page, t.within);
+  if (t.ref) throw new Error('Snapshot refs cannot be exported; record a semantic target');
+  if (t.nth !== undefined) {
+    if (!Number.isInteger(t.nth) || t.nth < 0) throw new Error('Invalid target index');
+    const { nth, ...rest } = t;
+    return `${locatorExpr(page, { ...rest, within: undefined })}.nth(${nth})`;
+  }
   if (t.role)
     return `${page}.getByRole(${q(t.role)}${t.name !== undefined ? `, { name: ${tpl(t.name)}, exact: ${t.exact !== false} }` : ''})`;
-  if (t.label) return `${page}.getByLabel(${tpl(t.label)})`;
+  if (t.label)
+    return `${page}.getByLabel(${tpl(t.label)}${t.exact !== undefined ? `, { exact: ${t.exact === true} }` : ''})`;
   if (t.testId) return `${page}.getByTestId(${tpl(t.testId)})`;
   if (t.placeholder) return `${page}.getByPlaceholder(${tpl(t.placeholder)})`;
   if (t.text) return `${page}.getByText(${tpl(t.text)}${t.exact ? ', { exact: true }' : ''})`;
@@ -49,7 +57,18 @@ function locatorExpr(page: string, t: Partial<Target>): string {
 
 function targetOf(input: Record<string, unknown>, action: string): Partial<Target> {
   const t: Partial<Target> = {};
-  for (const k of ['role', 'name', 'exact', 'label', 'testId', 'placeholder', 'selector'] as const)
+  for (const k of [
+    'ref',
+    'within',
+    'nth',
+    'role',
+    'name',
+    'exact',
+    'label',
+    'testId',
+    'placeholder',
+    'selector',
+  ] as const)
     if (input[k] !== undefined) (t as Record<string, unknown>)[k] = input[k];
   if (input.text !== undefined && action !== 'type') t.text = String(input.text);
   return t;

@@ -72,7 +72,7 @@ export class ActionExecutor {
     this.onRecorded({
       session: s.name,
       action,
-      ...(loc ? { target: loc.target, locatorExpr: loc.expr } : {}),
+      ...(loc ? { target: r?.recordingTarget ?? loc.target, locatorExpr: loc.expr } : {}),
       input,
       url,
       sensitive,

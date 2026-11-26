@@ -41,6 +41,31 @@ const BLOCKED_PAGE = (reason: string) =>
   `<!doctype html><title>Blocked by TG Browser policy</title><h1>Blocked by TG Browser policy</h1><p>${reason.replace(/[<>&]/g, '')}</p>`;
 
 export class SessionManager {
+  private readonly leases = new Map<string, string>();
+
+  /** Reserve all names atomically, including sessions that have not been created yet. */
+  acquireLeases(names: string[], owner: string, project = this.cfg.project): () => void {
+    const keys = [
+      ...new Set(
+        names.map((name) => {
+          const session = this.find(name, project);
+          if (session && [...session.pages.values()].some((page) => page.lock.holder))
+            throw new TgError('SESSION_BUSY', `Session ${name} has an action in flight`, { retryable: true });
+          return this.key(session?.project ?? project, session?.name ?? name);
+        }),
+      ),
+    ];
+    for (const key of keys) {
+      const held = this.leases.get(key);
+      if (held && held !== owner)
+        throw new TgError('SESSION_BUSY', `Session ${key} is leased by another run`, { retryable: true });
+    }
+    for (const key of keys) this.leases.set(key, owner);
+    return () => {
+      for (const key of keys) if (this.leases.get(key) === owner) this.leases.delete(key);
+    };
+  }
+
   private readonly sessions = new Map<string, Session>();
   private readonly recordings = new Map<
     string,

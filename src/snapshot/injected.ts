@@ -41,6 +41,7 @@ export interface CollectArgs {
 }
 
 export interface CollectResult {
+  complete: boolean;
   docId: string;
   nextIndex: number;
   nodes: RawNode[];
@@ -528,19 +529,24 @@ export function tgInstall(nonce: string, accessKey: string): void {
     const counter = { n: args.nextIndex };
     let nodeCount = 0;
     let truncated = false;
+    let depthTruncated = false;
+    let textTruncated = false;
     const keys = args.sensitiveKeys.map((k) => k.toLowerCase());
 
     function mergeText(list: RawNode[]): RawNode[] {
       const out: RawNode[] = [];
       for (const n of list) {
         const prev = out[out.length - 1];
-        if (n.role === 'text' && prev && prev.role === 'text')
+        if (n.role === 'text' && prev && prev.role === 'text') {
+          if (`${prev.name} ${n.name}`.length > args.maxTextLength * 2) textTruncated = true;
           prev.name = `${prev.name} ${n.name}`.slice(0, args.maxTextLength * 2);
-        else out.push(n);
+        } else out.push(n);
       }
       for (const n of out)
-        if (n.role === 'text' && n.name && n.name.length > args.maxTextLength)
+        if (n.role === 'text' && n.name && n.name.length > args.maxTextLength) {
+          textTruncated = true;
           n.name = `${n.name.slice(0, args.maxTextLength - 1)}…`;
+        }
       return out;
     }
 
@@ -613,6 +619,7 @@ export function tgInstall(nonce: string, accessKey: string): void {
       node.guard = guard(el);
       node.description = describe(el);
       const name = accName(el, role);
+      if (name.length > args.maxTextLength * 2) textTruncated = true;
       if (name)
         node.name =
           name.length > args.maxTextLength * 2 ? `${name.slice(0, args.maxTextLength * 2 - 1)}…` : name;
@@ -622,14 +629,20 @@ export function tgInstall(nonce: string, accessKey: string): void {
         const lvl = attr(el, 'aria-level') || (/^h[1-6]$/.test(tag) ? tag.slice(1) : '');
         if (lvl) node.level = Number(lvl);
       }
-      const v = valueOf(el, role, keys, args.maxTextLength);
-      if (v !== undefined) node.value = v;
+      const v = valueOf(el, role, keys, Number.MAX_SAFE_INTEGER);
+      if (v !== undefined) {
+        if (v.length > args.maxTextLength) textTruncated = true;
+        node.value = v.length > args.maxTextLength ? `${v.slice(0, args.maxTextLength - 1)}…` : v;
+      }
       if (role === 'iframe') {
         node.frameSlot = true;
         return [node];
       }
       if (depth + 1 > args.maxDepth) {
-        if (el.children.length) node.children = [{ role: 'text', name: '… (max depth)' }];
+        if (el.children.length || el.shadowRoot?.childNodes.length) {
+          depthTruncated = true;
+          node.children = [{ role: 'text', name: '… (max depth)' }];
+        }
         return [node];
       }
       // Name already carries the text content: do not repeat descendant text.
@@ -689,6 +702,7 @@ export function tgInstall(nonce: string, accessKey: string): void {
       nodes,
       nodeCount,
       truncatedByNodeLimit: truncated,
+      complete: !truncated && !depthTruncated && !textTruncated && !scopeMissing && !args.scopeRef && !!root,
       ...(scopeMissing ? { scopeMissing } : {}),
       url: location.href,
       title: document.title,

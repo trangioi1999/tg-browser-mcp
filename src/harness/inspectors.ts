@@ -36,6 +36,7 @@ export class Inspectors {
         maxChars: Math.min(opts.maxChars ?? this.pipeline.cfg.snapshot.maxChars, 200_000),
         ...(opts.page ? { page: opts.page } : {}),
       });
+      snap.complete = f.complete;
       let text = f.text;
       if (ps.pendingDialog)
         text += `\n\n[dialog open] ${ps.pendingDialog.type}: "${ps.pendingDialog.message}" — call browser_dialog`;
