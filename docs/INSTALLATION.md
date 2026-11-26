@@ -1,6 +1,6 @@
 # Installation
 
-Requirements: Node.js ≥ 20.10 (LTS recommended), npm, and a browser — installed Chrome/Edge, or Playwright-managed browsers.
+Requirements: Node.js ≥ 22.13 (LTS recommended), npm, and a browser — installed Chrome/Edge, or Playwright-managed browsers.
 
 ## macOS / Linux
 

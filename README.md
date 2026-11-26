@@ -46,7 +46,7 @@ Removed:
 
 ## Quick start
 
-Requirements: Node.js ≥ 20.10 and Chrome/Edge installed (or `npx playwright install chromium`).
+Requirements: Node.js ≥ 22.13 and Chrome/Edge installed (or `npx playwright install chromium`).
 
 ```bash
 git clone <repo> tg-browser-mcp && cd tg-browser-mcp

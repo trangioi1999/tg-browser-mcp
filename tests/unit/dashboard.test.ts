@@ -1,3 +1,4 @@
+import { RunStore } from '../../src/storage/store.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { memoryListener } from '../http-memory.js';
@@ -91,6 +92,21 @@ describe('dashboard API', () => {
     expect((await put({}, { Origin: 'https://evil.test' })).status).toBe(403);
     expect((await put({}, { 'X-TG-CSRF': '0' })).status).toBe(403);
     expect((await put({}, { Origin: '' })).status).toBe(403);
+  });
+  it('discovers SQLite-only projects and reads their runs without legacy files', async () => {
+    new RunStore(dir, 'sqlite-only').save({
+      runId: 'sql-run',
+      project: 'sqlite-only',
+      workflow: 'wf',
+      status: 'passed',
+      startedAt: new Date().toISOString(),
+      steps: [],
+      variables: {},
+    });
+    expect(fs.existsSync(path.join(dir, 'runs'))).toBe(false);
+    expect(JSON.parse((await get('/api/projects')).text)).toEqual(['sqlite-only']);
+    expect(JSON.parse((await get('/api/runs?project=sqlite-only')).text)[0].runId).toBe('sql-run');
+    expect(JSON.parse((await get('/api/runs/sqlite-only/sql-run')).text).workflow).toBe('wf');
   });
   it('validates config and writes atomically with a backup', async () => {
     expect((await put({ tools: { profile: 'invalid' } })).status).toBe(400);

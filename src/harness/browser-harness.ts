@@ -1,3 +1,4 @@
+import { indexArtifactEvents } from '../storage/artifact-events.js';
 import fs from 'node:fs';
 import { SessionJournal } from '../journal/session-journal.js';
 import type { TgConfig, TgConfigInput } from '../config/schema.js';
@@ -31,6 +32,7 @@ export class BrowserHarness {
   readonly journal: SessionJournal;
   readonly config: TgConfig;
   readonly events = new TypedEmitter();
+  private readonly stopArtifactIndex: () => void;
   readonly policy: DomainPolicy;
   readonly redactor: DataRedactor;
   readonly permissions: PermissionManager;
@@ -48,6 +50,7 @@ export class BrowserHarness {
     fs.mkdirSync(this.config.dataDir, { recursive: true, mode: 0o700 });
     this.policy = new DomainPolicy(this.config.security);
     this.redactor = new DataRedactor(this.config.security.sensitiveFields);
+    this.stopArtifactIndex = indexArtifactEvents(this.config.dataDir, this.events);
     this.journal = new SessionJournal(this.config, this.redactor, this.events);
     this.permissions = new PermissionManager(this.config);
     this.audit = new AuditLogger(this.config.dataDir);
@@ -108,6 +111,7 @@ export class BrowserHarness {
     this.closed = true;
     await this.sessions.closeAll();
     await this.browsers.closeAll();
+    this.stopArtifactIndex();
   }
 }
 

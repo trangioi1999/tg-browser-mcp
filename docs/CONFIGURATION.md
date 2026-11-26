@@ -59,3 +59,42 @@ Failure retention considers action and workflow failures; videos finalize when p
 Existing CDP contexts cannot have recording enabled retroactively. See [Dashboard](DASHBOARD.md) for storage,
 privacy and retention details. `tg-browser-mcp ui` edits the same config with validation and a `.bak` backup;
 restart MCP clients to apply changes. Proxy credential fields are environment variable **names**, never values.
+
+## Storage and JSON run migration (0.2)
+
+Node.js **22.13 or newer** is required. New installations store run checkpoints
+and artifact metadata in `dataDir/storage.sqlite` (0600). SQLite uses WAL,
+a 5-second busy timeout and versioned schema migrations. Each checkpoint is one
+atomic write; no transaction spans a browser action. Workflow definitions remain
+atomic JSON files; artifact binaries remain project-scoped files. Authentication
+state and encryption keys stay in their dedicated stores. Resolved
+`TG_SECRET_*` values and sensitive fields are redacted before persistence.
+
+Existing `runs/<project>/*.json` remain readable until finalization. While a
+legacy runs directory exists and migration is not finalized, it takes precedence
+and new checkpoints are also written there to preserve rollback. Fresh stores
+write only SQLite. Stop writers during migration/finalization and rollback.
+
+```sh
+tg-browser-mcp migrate --config ./tg-browser.config.json --dry-run
+tg-browser-mcp migrate --config ./tg-browser.config.json --backup
+tg-browser-mcp migrate --config ./tg-browser.config.json --finalize
+```
+
+Dry run validates every run and workflow, reports counts, unreadable paths and
+conflicts, and does not create a database or backup. Backup copies runs and
+workflows under `dataDir/backups/<timestamp>-<id>/` before import, plus a consistent
+`VACUUM INTO` snapshot of an existing database. Import is transactional per project
+and idempotent by project/run ID. Conflicting DB records are kept and reported;
+invalid files are reported. Either condition prevents finalization and makes the
+CLI exit 1. No legacy files are deleted. Review conflicting records and correct
+or move invalid legacy files before retrying.
+
+Before finalization, rollback by stopping all processes and moving
+`storage.sqlite`, `storage.sqlite-wal` and `storage.sqlite-shm` together out of
+dataDir. The retained JSON checkpoints remain usable, and the next start can
+read them. A subsequent migration rebuilds the database. Restore a backup's runs
+and workflows if the files themselves need rollback. After finalization, new
+writes are SQLite-only: restoring an older backup loses later writes, so first
+preserve the current database and artifact files. Never delete WAL files from a
+running database. Keep backups private; legacy files may predate redaction.
