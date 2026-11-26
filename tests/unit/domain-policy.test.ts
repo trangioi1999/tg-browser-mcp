@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DomainPolicy, isPrivateIp, matchHost, safeUrlForLog } from '../../src/security/domain-policy.js';
 import { parseConfig } from '../../src/config/load-config.js';
 
@@ -92,4 +92,74 @@ describe('IPv4-mapped IPv6', () => {
     expect((await p.check('http://[::ffff:10.0.0.1]/')).allowed).toBe(false);
     expect((await p.check('http://[::ffff:127.0.0.1]:8080/')).allowed).toBe(true);
   });
+});
+
+describe('mandatory DNS metadata checks', () => {
+  const addresses = [
+    '169.254.169.254',
+    '169.254.170.2',
+    '100.100.100.200',
+    'fd00:ec2::254',
+    'fd00:0ec2:0:0:0:0:0:0254',
+    '::ffff:169.254.169.254',
+    '::ffff:a9fe:a9fe',
+  ];
+  for (const allowedDomains of [[], ['*'], ['alias.test'], ['*.test']]) {
+    for (const allowPrivateNetwork of [false, true]) {
+      for (const allowLocalhost of [false, true]) {
+        it(`denies metadata for ${JSON.stringify({ allowedDomains, allowPrivateNetwork, allowLocalhost })}`, async () => {
+          for (const address of addresses) {
+            const p = new DomainPolicy(
+              sec({ allowedDomains, allowPrivateNetwork, allowLocalhost }),
+              fakeDns({ 'alias.test': ['93.184.216.34', address] }),
+            );
+            expect(await p.check('https://alias.test/'), address).toMatchObject({
+              allowed: false,
+              reason: expect.stringContaining('metadata'),
+            });
+          }
+        });
+      }
+    }
+  }
+
+  it('also resolves localhost names before permitting access', async () => {
+    const p = new DomainPolicy(sec(), fakeDns({ localhost: ['169.254.169.254'] }));
+    expect(await p.check('http://localhost/')).toMatchObject({ allowed: false });
+  });
+
+  it('preserves private and loopback configuration and allowlist exemptions', async () => {
+    for (const allowedDomains of [[], ['alias.test']]) {
+      for (const allowPrivateNetwork of [false, true]) {
+        for (const allowLocalhost of [false, true]) {
+          for (const address of ['10.0.0.1', '127.0.0.1', '::1']) {
+            const p = new DomainPolicy(
+              sec({ allowedDomains, allowPrivateNetwork, allowLocalhost }),
+              fakeDns({ 'alias.test': [address] }),
+            );
+            expect((await p.check('https://alias.test/')).allowed).toBe(
+              allowedDomains.length > 0 || (address === '10.0.0.1' ? allowPrivateNetwork : allowLocalhost),
+            );
+          }
+        }
+      }
+    }
+  });
+});
+
+it('caches DNS results for 30 seconds, then rechecks metadata', async () => {
+  vi.useFakeTimers();
+  try {
+    const resolver = vi.fn().mockResolvedValueOnce(['93.184.216.34']).mockResolvedValue(['169.254.169.254']);
+    const p = new DomainPolicy(sec({ allowedDomains: ['*'], allowPrivateNetwork: true }), resolver);
+    expect((await p.check('https://alias.test/')).allowed).toBe(true);
+    vi.advanceTimersByTime(29_999);
+    expect((await p.check('https://alias.test/')).allowed).toBe(true);
+    expect(resolver).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect((await p.check('https://alias.test/')).allowed).toBe(false);
+    expect(resolver).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });

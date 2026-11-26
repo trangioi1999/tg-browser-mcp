@@ -18,6 +18,17 @@ Durable Object "main" → Container (Dockerfile)
 - Docker running locally (Wrangler builds the `linux/amd64` image and pushes it to Cloudflare's registry).
 - `npx wrangler login`.
 
+## Check the image locally (optional)
+
+CI builds the image and runs `doctor` on every push (`docker` job). To check before deploying:
+
+```bash
+docker build -t tg-browser-mcp .
+docker run --rm tg-browser-mcp node /app/dist/index.js doctor --config /app/tg-browser.cloud.json
+```
+
+All checks, including `Browser launch`, should pass. Wrangler builds `linux/amd64`; on Apple Silicon add `--platform linux/amd64` to test the same architecture.
+
 ## Deploy
 
 ```bash

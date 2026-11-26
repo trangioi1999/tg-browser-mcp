@@ -231,6 +231,68 @@ describe('browser harness (real browser)', () => {
   });
 });
 
+describe('custom combobox option matching (D18)', () => {
+  it('picks an exact or unique substring match and refuses ambiguous ones', async () => {
+    const s = await h.createSession({ name: 'combo' });
+    await s.navigate(`${base}/combobox-ambiguous`);
+    const combo = { role: 'combobox', name: 'Account' };
+    const page = s.raw.page().page;
+    // "Account" is contained in three options and matches none exactly: ambiguous, nothing is clicked.
+    await expect(s.select(combo, 'Account')).rejects.toMatchObject({
+      code: 'ELEMENT_AMBIGUOUS',
+      context: { candidates: ['Savings Account', 'Checking Account', 'Account Closure'] },
+    });
+    expect(await page.locator('#acct').textContent()).toBe('Choose…');
+    expect(await page.locator('#acct-list').isVisible()).toBe(false);
+    // Two options with the same text are ambiguous as well.
+    await expect(s.select(combo, 'Joint')).rejects.toMatchObject({ code: 'ELEMENT_AMBIGUOUS' });
+    expect(await page.locator('#acct').textContent()).toBe('Choose…');
+    // A unique substring and an exact (case-insensitive) match still work.
+    await s.select(combo, 'Checking');
+    expect(await page.locator('#acct').textContent()).toBe('Checking Account');
+    await s.select(combo, 'loan');
+    expect(await page.locator('#acct').textContent()).toBe('Loan');
+    await s.close();
+  });
+});
+
+describe('SDK sessions in non-default projects (D8)', () => {
+  it('act on the session of their own project, never a same-named session elsewhere', async () => {
+    const p2 = await h.createSession({ name: 'proj-user', project: 'p2' });
+    expect(p2.project).toBe('p2');
+    const r = await p2.navigate(`${base}/login`);
+    expect(r.pageState).toContain('Page: Login');
+    await p2.fill({ label: 'Username' }, 'maker');
+    expect((await p2.snapshot()).text).toContain('Page: Login');
+    const saved = await p2.save();
+    expect(saved.project).toBe('p2');
+    // A same-named session in the default project is a different session.
+    const dflt = await h.createSession({ name: 'proj-user' });
+    await dflt.navigate(`${base}/dynamic`);
+    expect(p2.raw.pages.get(p2.raw.activePageId!)!.page.url()).toContain('/login');
+    expect(h.session('proj-user', 'p2').raw.id).toBe(p2.raw.id);
+    await p2.close();
+    await dflt.close();
+  });
+
+  it('let name-addressed tools (no project param) reach a session that exists in one other project', async () => {
+    const only = await h.createSession({ name: 'elsewhere', project: 'p3' });
+    await only.navigate(`${base}/login`);
+    // MCP page tools pass only `session`; the name exists in exactly one project.
+    const snap = await h.actions.snapshot({}, { session: 'elsewhere' });
+    expect(snap.sessionId).toBe(only.raw.id);
+    const twin = await h.createSession({ name: 'elsewhere', project: 'p4' });
+    await expect(h.actions.snapshot({}, { session: 'elsewhere' })).rejects.toMatchObject({
+      code: 'SESSION_AMBIGUOUS',
+      suggestion: expect.stringContaining('session id'),
+    });
+    // The id stays unambiguous.
+    expect((await h.actions.snapshot({}, { session: twin.raw.id })).sessionId).toBe(twin.raw.id);
+    await only.close();
+    await twin.close();
+  });
+});
+
 describe('labels bound to controls', () => {
   it('are not reported as separate clickable elements (cursor:pointer labels)', async () => {
     const s = await h.createSession({ name: 'labels' });

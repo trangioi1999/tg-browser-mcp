@@ -1,6 +1,6 @@
 # Progress
 
-Last update: 2026-11-24
+Last update: 2026-11-25
 
 ## Completed
 
@@ -8,19 +8,24 @@ Last update: 2026-11-24
 - 69 MCP tools across 10 categories; profiles minimal (8) / developer (40) / testing (61) / full (69).
 - Docs: README, architecture, installation, configuration, CLI, tools (generated), clients, proxy & troubleshooting, sessions, Angular, workflows, security model, threat model, TG Studio, benchmark, roadmap, 6 ADRs, contributing.
 
-## In progress
+## V2 review — Phase 0 stabilization (2026-11-25)
 
-- Local dashboard implemented: Vietnamese offline UI, authenticated localhost API, configuration editing,
-  per-session journal, recording, workflow/report links and regression tests. See [Dashboard](DASHBOARD.md).
-  Full fixture/browser verification and focused commits remain blocked in the restricted worktree sandbox
-  (localhost listen EPERM, Chrome SIGABRT, Git index.lock EPERM).
-  Validation: lint, typecheck, build and changed-file formatting pass; 69 unit tests pass in 8 files.
-  Final full-suite rerun with shorter sandbox timeouts: 69 passed, 2 failed, 55 skipped (126 tests),
-  10 listener errors; 8 files passed and 9 failed. Browser/fixture integration remains unverified.
+Implements Phase 0 of [docs/reviews/v2](reviews/v2/15-IMPLEMENTATION-ROADMAP.md) (backlog TGB-001…TGB-011):
+Docker build + CI `docker` job (D11); policy gate on every mutating action (D2); hardened snapshot engine
+installation (D5); safe test generation (D3); DNS metadata rule always applied (D4); secrets restricted to
+fill/type values (D14); honest timeouts with `INDETERMINATE` / `PAGE_BUSY` (D12); runtime ref guard (D1) and slot
+dedupe (D10); per-page lock and in-flight session creation (D15, D25); input-aware retry classes (D13);
+assertion masking (D7); SDK/MCP project addressing (D8); atomic run files (D9); HTTP eviction of busy sessions
+(D17); combobox ambiguity (D18); audit attribution (D20); separate write roots (S-08); hermetic tests (proxy and
+`TG_BROWSER_*` env cleared, video tests skip without Playwright ffmpeg); doc corrections.
+
+The local dashboard (previously "in progress", blocked in a sandbox) is verified by `dashboard.test.ts` on a real
+browser, including video retention.
 
 ## Pending
 
 - npm publish, OS keychain integration, sub-resource redirect enforcement, Firefox/WebKit CI runs (see ROADMAP.md "Next").
+- V2 Phase 1+ (TGB-012…TGB-023): ActionPipeline, ActionOutcome + `expect`, SQLite storage, Browser Memory, adaptive matching (see [reviews/v2/16-DEVELOPMENT-BACKLOG.md](reviews/v2/16-DEVELOPMENT-BACKLOG.md)).
 
 ## Implementation backlog (prioritized, original plan)
 
@@ -44,9 +49,11 @@ Last update: 2026-11-24
 
 See docs/adr/0001–0006.
 
-## Test results (local, macOS, Node 24.18, Chrome 158 headless)
+## Test results (local, macOS, Node 24.18, Chrome headless, 2026-11-25)
 
-`npm test` → **14 files, 104 tests passed** (unit 47; integration: harness 15, security 10, MCP STDIO 8, network/proxy 4, lifecycle 4, HTTP transport 4; E2E maker-checker 5 incl. generated Playwright test run). `npm run lint`, `npm run typecheck`, `npm run build`, `doctor` all clean.
+`npm test` → **28 files, 231 tests passed**, also with `HTTPS_PROXY`/`HTTP_PROXY` set in the environment
+(hermeticity). `npm run lint`, `npm run typecheck`, `npm run build` clean. Docker image built from a clean
+checkout; `doctor` (including browser launch) passes in the container.
 
 ## Bugs found by tests and fixed
 

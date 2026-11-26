@@ -7,6 +7,8 @@ export interface AuditEntry {
   tool: string;
   risk: string;
   sessionId?: string;
+  /** Name of the session the call targeted (D20), also recorded when it could not be resolved. */
+  session?: string;
   project: string;
   agentId?: string;
   status: 'ok' | 'error' | 'denied';

@@ -11,6 +11,8 @@ import { TgError } from '../../shared/errors.js';
  *  - Any WAI-ARIA compliant custom select
  * Options are scoped to the aria-controls popup when present, otherwise looked up page-wide
  * (overlays are usually rendered at <body> level). Only visible options are considered.
+ * Matching: a unique exact (case-insensitive, trimmed) match, else a unique substring match; several
+ * matches raise ELEMENT_AMBIGUOUS with the candidates instead of picking one (D18).
  */
 export async function selectCustomOption(
   ps: PageState,
@@ -52,6 +54,8 @@ export async function selectCustomOption(
       .first()
       .waitFor({ state: 'visible', timeout: Math.min(timeout, 5000) })
       .catch(() => undefined);
+    // D18: exact match first; a substring match only when exactly one option contains the text.
+    // Several candidates are an error (never silently click the first one).
     const option = (await exact.count()) > 0 ? exact : scope().filter({ hasText: value });
     try {
       await option.first().waitFor({ state: 'visible', timeout: Math.min(timeout, 5000) });
@@ -69,6 +73,24 @@ export async function selectCustomOption(
         },
         suggestion: 'Use one of the available option names.',
       });
+    }
+    if ((await option.count()) > 1) {
+      const candidates = await option.allInnerTexts().catch(() => [] as string[]);
+      await closePopup();
+      throw new TgError(
+        'ELEMENT_AMBIGUOUS',
+        `Option "${value}" is ambiguous: ${candidates.length} options match`,
+        {
+          context: {
+            candidates: candidates
+              .map((t) => t.trim())
+              .filter(Boolean)
+              .slice(0, 20),
+          },
+          suggestion: 'Use the full, exact option name (or a snapshot ref of the option).',
+          retryable: false,
+        },
+      );
     }
     await option.first().click({ timeout });
     chosen.push(value);

@@ -1,3 +1,4 @@
+import { installScriptSource } from '../snapshot/injected.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { BrowserContext, BrowserContextOptions, Page } from 'playwright';
@@ -90,14 +91,38 @@ export class SessionManager {
     );
   }
 
+  /**
+   * Resolves a session by id, or by name in `project` (default: the configured project). When no project
+   * is given and the name is not in the configured project, a name that exists in exactly one other
+   * project resolves to that session, so MCP page tools can address sessions created with
+   * `session_create project=...` (D8). A name present in several other projects is ambiguous.
+   */
   get(nameOrId?: string, project?: string): Session {
-    const s = nameOrId ? this.find(nameOrId, project) : this.active;
+    let s = nameOrId ? this.find(nameOrId, project) : this.active;
+    if (nameOrId && !s && project === undefined) {
+      const named = [...this.sessions.values()].filter((x) => x.name === nameOrId && x.status === 'active');
+      if (named.length > 1) {
+        throw new TgError(
+          'SESSION_AMBIGUOUS',
+          `Session name "${nameOrId}" exists in several projects: ${named.map((x) => `${x.project}/${x.name} (${x.id})`).join(', ')}`,
+          {
+            context: { sessions: named.map((x) => ({ id: x.id, project: x.project, name: x.name })) },
+            suggestion: 'Pass the session id instead of its name.',
+          },
+        );
+      }
+      s = named[0];
+    }
     if (!s || s.status !== 'active') {
       throw new TgError(
         'SESSION_NOT_FOUND',
         nameOrId ? `Session "${nameOrId}" not found` : 'No active session',
         {
-          context: { sessions: this.list().map((x) => x.name) },
+          context: {
+            sessions: this.list().map((x) =>
+              x.project === this.cfg.project ? x.name : `${x.project}/${x.name} (${x.id})`,
+            ),
+          },
         },
       );
     }
@@ -119,6 +144,8 @@ export class SessionManager {
       this.activeKey = this.key(existing.project, existing.name);
       return existing;
     }
+    const pending = this.creating.get(this.key(this.cfg.project, 'default'));
+    if (pending) return pending;
     return this.create({ name: 'default', persistent: this.cfg.browser.persistent });
   }
 
@@ -153,23 +180,45 @@ export class SessionManager {
     return o;
   }
 
+  /** Creations in flight, so concurrent creates of the same name cannot both launch a context (D25). */
+  private readonly creating = new Map<string, Promise<Session>>();
+
   async create(opts: CreateSessionOptions): Promise<Session> {
     const name = assertSafeName('session', opts.name);
     const project = assertSafeName('project', opts.project ?? this.cfg.project);
     const k = this.key(project, name);
+    if (this.creating.has(k)) {
+      throw new TgError(
+        'SESSION_EXISTS',
+        `Session "${name}" is already being created in project "${project}"`,
+        {
+          suggestion: 'Wait for the other session_create to finish, then use session_switch.',
+        },
+      );
+    }
     const existing = this.sessions.get(k);
     if (existing && existing.status === 'active') {
       throw new TgError('SESSION_EXISTS', `Session "${name}" already exists in project "${project}"`, {
         suggestion: 'Use session_switch, or session_delete first.',
       });
     }
-    if (this.sessions.size >= this.cfg.security.maxSessions) {
+    // In-flight creations count against the limit, so concurrent creates cannot exceed it.
+    if (this.sessions.size + this.creating.size >= this.cfg.security.maxSessions) {
       throw new TgError(
         'RESOURCE_LIMIT_EXCEEDED',
         `Maximum of ${this.cfg.security.maxSessions} sessions reached`,
       );
     }
+    const p = this.createUnlocked(opts, name, project);
+    this.creating.set(k, p);
+    try {
+      return await p;
+    } finally {
+      this.creating.delete(k);
+    }
+  }
 
+  private async createUnlocked(opts: CreateSessionOptions, name: string, project: string): Promise<Session> {
     const ctxOpts = this.contextOptions(opts);
     let restored: { cookies: number; origins: number } | undefined;
     if (opts.restore) {
@@ -293,6 +342,7 @@ export class SessionManager {
     this.recordings.set(session.id, { retain: !!o.retainVideo, failed: false, videos: [] });
     monitor.attachContext(context);
     await this.installPolicy(context, monitor);
+    await context.addInitScript(installScriptSource());
     if (o.indicator) {
       const label = `TG Browser MCP · ${o.name}`;
       await context.addInitScript(
@@ -483,8 +533,9 @@ export class SessionManager {
 
   async save(
     nameOrId?: string,
+    project?: string,
   ): Promise<{ name: string; project: string; cookies: number; origins: number; savedAt: string }> {
-    const s = this.get(nameOrId);
+    const s = this.get(nameOrId, project);
     const state = await s.context.storageState({ indexedDB: true });
     const url = s.activePageId ? s.pages.get(s.activePageId)?.page.url() : undefined;
     const meta = this.store.save(s.project, s.name, state, {

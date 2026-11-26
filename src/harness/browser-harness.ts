@@ -120,7 +120,7 @@ export class HarnessSession {
   ) {}
 
   private get ctx(): ActionContext {
-    return { session: this.name };
+    return { session: this.name, project: this.project };
   }
 
   get raw(): Session {
@@ -173,7 +173,7 @@ export class HarnessSession {
     return this.h.actions.dialog(accept, promptText, this.ctx);
   }
   save() {
-    return this.h.sessions.save(this.name);
+    return this.h.sessions.save(this.name, this.project);
   }
   close(): Promise<void> {
     return this.h.sessions.close(this.name, this.project);

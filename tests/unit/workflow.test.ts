@@ -84,13 +84,13 @@ describe('interpolation and conditions', () => {
   it('interpolates variables and secrets, tracking secret values', () => {
     process.env.TG_SECRET_PW = 's3cret';
     const secrets = new Set<string>();
-    expect(interpolate({ a: '${X}/y', b: ['${secret.pw}'] }, { X: '1' }, secrets)).toEqual({
+    expect(interpolate({ a: '${X}/y', b: ['${secret.pw}'] }, { X: '1' }, secrets, true)).toEqual({
       a: '1/y',
       b: ['s3cret'],
     });
     expect(secrets.has('s3cret')).toBe(true);
     expect(() => interpolate('${MISSING}', {}, secrets)).toThrow(/not defined/);
-    expect(() => interpolate('${secret.nope}', {}, secrets)).toThrow(/TG_SECRET_NOPE/);
+    expect(() => interpolate('${secret.nope}', {}, secrets, true)).toThrow(/TG_SECRET_NOPE/);
   });
   it('evaluates the safe condition language', () => {
     const v = { A: 'x', E: '', F: 'false' };
@@ -127,10 +127,10 @@ describe('test generation', () => {
       ],
     });
     const code = generatePlaywrightTest(wf);
-    expect(code).toContain("getByRole('button', { name: 'Submit', exact: true })");
-    expect(code).toContain("getByLabel('Customer Name')");
-    expect(code).toContain('getByTestId(`status-${vars.REQ}`)');
-    expect(code).toContain("secret('MAKER_PASSWORD')");
+    expect(code).toContain('getByRole("button", { name: "Submit", exact: true })');
+    expect(code).toContain('getByLabel("Customer Name")');
+    expect(code).toContain('getByTestId("status-" + vars.REQ + "")');
+    expect(code).toContain('secret("MAKER_PASSWORD")');
     expect(code).toContain('makerContext = await browser.newContext()');
     expect(code).toContain('checkerContext = await browser.newContext()');
     expect(code).not.toContain('s3cret');

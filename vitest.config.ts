@@ -8,5 +8,7 @@ export default defineConfig({
     // Browser tests launch real browsers; keep files sequential to avoid resource contention.
     fileParallelism: false,
     env: { TG_LOG_LEVEL: 'silent' },
+    // Clears ambient proxy / TG_BROWSER_* variables before every test file.
+    setupFiles: ['tests/setup.ts'],
   },
 });

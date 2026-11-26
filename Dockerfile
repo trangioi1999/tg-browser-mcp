@@ -11,6 +11,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+COPY scripts/copy-ui.mjs ./scripts/
 RUN npm run build
 
 FROM node:${NODE_VERSION} AS runtime

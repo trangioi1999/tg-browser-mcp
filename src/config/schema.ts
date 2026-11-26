@@ -97,10 +97,17 @@ export const SecurityConfigSchema = z.object({
   enforceOnSubresources: z.boolean().default(true),
   fileAccess: z
     .object({
-      /** Roots that upload/screenshot/trace/workflow file paths must live in. Default: working dir + data dir. */
+      /** Roots that files the agent READS (uploads) must live in. Default: working dir + data dir. */
       allowedRoots: z.array(z.string()).default([]),
+      /**
+       * Roots that agent-chosen output paths (screenshot/trace/test_generate/test_report `path`) must live in.
+       * Default: `<dataDir>/artifacts` only — the working directory is never writable implicitly (S-08).
+       */
+      writeRoots: z.array(z.string()).default([]),
+      /** Allow agent-chosen output paths to replace existing regular files. Symlinks are never followed. */
+      allowOverwrite: z.boolean().default(false),
     })
-    .default({ allowedRoots: [] }),
+    .default({ allowedRoots: [], writeRoots: [], allowOverwrite: false }),
   approval: ApprovalSchema.default(ApprovalSchema.parse({})),
   /** Extra field names (case-insensitive substrings) to redact in snapshots, network, and logs. */
   sensitiveFields: z.array(z.string()).default([]),
@@ -159,6 +166,12 @@ export const HttpConfigSchema = z.object({
 });
 
 export const ConfigSchema = z.object({
+  workflows: z
+    .object({
+      /** Allow inline workflow definitions to reference TG_SECRET_* in fill/type values. */
+      allowInlineSecrets: z.boolean().default(false),
+    })
+    .default({ allowInlineSecrets: false }),
   journal: z
     .object({
       enabled: z.boolean().default(true),

@@ -23,3 +23,9 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:integration
       - run: node dist/index.js doctor --no-launch
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t tg-browser-mcp:ci .
+      - run: docker run --rm tg-browser-mcp:ci node /app/dist/index.js doctor --no-launch --config /app/tg-browser.cloud.json

@@ -54,6 +54,12 @@ describe('maker-checker business workflow (E2E)', () => {
   });
 
   it('reports failures with diagnostics and does not retry non-idempotent submissions', async () => {
+    // Establish authentication independently of the preceding workflow test.
+    const maker = h.sessions.find('maker') ? h.session('maker') : await h.createSession({ name: 'maker' });
+    await maker.navigate(`${base}/login`);
+    await maker.fill({ label: 'Username' }, 'maker');
+    await maker.fill({ label: 'Password' }, 'maker123');
+    await maker.click({ role: 'button', name: 'Sign in' });
     const wf = {
       name: 'Failing',
       steps: [

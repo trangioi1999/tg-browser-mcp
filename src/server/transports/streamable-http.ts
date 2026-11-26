@@ -8,10 +8,65 @@ import { getLogger } from '../../shared/logger.js';
 import { TgError } from '../../shared/errors.js';
 import { isLoopback } from '../../security/domain-policy.js';
 
-interface HttpSession {
+interface HttpSession extends ReapableSession {
   transport: StreamableHTTPServerTransport;
   handle: McpServerHandle;
+}
+
+/** Liveness bookkeeping used to decide whether an HTTP MCP session may be reaped or evicted (D17). */
+export interface ReapableSession {
+  /** Last time a request started or finished (ms epoch). */
   lastSeen: number;
+  /** POST requests whose response has not finished yet (a long tool call counts until it returns). */
+  inFlight: number;
+  /** Workflow runs (e.g. `background=true`) still executing in this session's harness. */
+  runs: Set<string>;
+}
+
+/** A session is busy while a request is in flight or a workflow is running; busy sessions are never closed. */
+export function isBusy(s: ReapableSession): boolean {
+  return s.inFlight > 0 || s.runs.size > 0;
+}
+
+/** True when the session is not busy and has been quiet for longer than `idleMs`. */
+export function isIdle(s: ReapableSession, now: number, idleMs: number): boolean {
+  return !isBusy(s) && now - s.lastSeen > idleMs;
+}
+
+/**
+ * The stalest session that may be evicted to admit a new client: never a busy one, and only when it
+ * has been quiet for at least `minIdleMs`. Returns undefined when nobody can be evicted.
+ */
+export function pickEvictable<K, S extends ReapableSession>(
+  sessions: Iterable<[K, S]>,
+  now: number,
+  minIdleMs: number,
+): [K, S] | undefined {
+  let best: [K, S] | undefined;
+  for (const e of sessions) {
+    if (isBusy(e[1]) || now - e[1].lastSeen < minIdleMs) continue;
+    if (!best || e[1].lastSeen < best[1].lastSeen) best = e;
+  }
+  return best;
+}
+
+/**
+ * Marks one request in flight until its response finishes (or the connection drops), refreshing
+ * `lastSeen` at both ends so a long tool call never looks idle.
+ */
+export function trackRequest(
+  s: ReapableSession,
+  res: { once(event: 'close', cb: () => void): unknown },
+): void {
+  s.inFlight++;
+  s.lastSeen = Date.now();
+  let done = false;
+  res.once('close', () => {
+    if (done) return;
+    done = true;
+    s.inFlight = Math.max(0, s.inFlight - 1);
+    s.lastSeen = Date.now();
+  });
 }
 
 /**
@@ -19,7 +74,8 @@ interface HttpSession {
  *  - Bearer token required (read from env `http.tokenEnv`, never from config files).
  *  - Binds to 127.0.0.1 by default; DNS-rebinding protection (Host/Origin allowlist) enabled.
  *  - Each MCP session gets its own BrowserHarness (separate browser + contexts): no cross-session leakage.
- *  - Per-IP rate limiting and a cap on concurrent sessions; idle sessions are reaped.
+ *  - Per-IP rate limiting and a cap on concurrent sessions; idle sessions are reaped. Sessions with a
+ *    request in flight or a running workflow are never reaped or evicted (D17).
  */
 export async function startStreamableHttp(
   config: TgConfig,
@@ -78,7 +134,7 @@ export async function startStreamableHttp(
   const reaper = setInterval(() => {
     const now = Date.now();
     for (const [id, s] of sessions) {
-      if (now - s.lastSeen > config.http.idleTimeoutMinutes * 60_000) {
+      if (isIdle(s, now, config.http.idleTimeoutMinutes * 60_000)) {
         sessions.delete(id);
         void s.handle.close();
         log.info({ sessionId: id }, 'reaped idle MCP session');
@@ -117,30 +173,34 @@ export async function startStreamableHttp(
         const msg: unknown = body ? JSON.parse(body) : undefined;
         if (sid && sessions.has(sid)) {
           const s = sessions.get(sid)!;
-          s.lastSeen = Date.now();
+          trackRequest(s, res);
           return void (await s.transport.handleRequest(req, res, msg));
         }
         if (!sid && isInitializeRequest(msg)) {
           if (sessions.size >= config.http.maxSessions) {
             // Clients that disconnect without DELETE leave sessions behind: reclaim the stalest
             // idle one instead of locking everybody out until the idle timeout.
-            const [oldestId, oldest] = [...sessions.entries()].sort(
-              (a, b) => a[1].lastSeen - b[1].lastSeen,
-            )[0]!;
-            if (Date.now() - oldest.lastSeen < config.http.evictIdleAfterSeconds * 1000)
-              return send(503, 'Too many active sessions; retry later');
+            // Sessions with requests in flight or running workflows are never evicted.
+            const victim = pickEvictable(sessions, Date.now(), config.http.evictIdleAfterSeconds * 1000);
+            if (!victim) return send(503, 'Too many active sessions; retry later');
+            const [oldestId, oldest] = victim;
             sessions.delete(oldestId);
             void oldest.handle.close();
             log.info({ sessionId: oldestId }, 'evicted idle MCP session to admit a new client');
           }
           const handle = createMcpServer(config);
+          const entry: ReapableSession = { lastSeen: Date.now(), inFlight: 0, runs: new Set() };
+          trackRequest(entry, res);
+          handle.harness.events.on('workflow.started', (e) => entry.runs.add(e.runId));
+          handle.harness.events.on('workflow.completed', (e) => entry.runs.delete(e.runId));
+          handle.harness.events.on('workflow.failed', (e) => entry.runs.delete(e.runId));
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             enableDnsRebindingProtection: true,
             allowedHosts,
             ...(config.http.allowedOrigins.length ? { allowedOrigins: config.http.allowedOrigins } : {}),
             onsessioninitialized: (id) => {
-              sessions.set(id, { transport, handle, lastSeen: Date.now() });
+              sessions.set(id, Object.assign(entry, { transport, handle }));
               log.info({ sessionId: id }, 'MCP HTTP session started');
             },
           });

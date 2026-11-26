@@ -12,6 +12,7 @@ export function createFixtureServer() {
   const sessions = new Map(); // sid -> username
   const requests = new Map(); // id -> request
   let seq = 1000;
+  const slow = { submits: 0 }; // TGB-007/009: server-side count of /api/slow-submit requests
 
   const esc = (s) =>
     String(s).replace(
@@ -68,6 +69,48 @@ export function createFixtureServer() {
   }
 
   const pages = {
+    '/virtual-table': () =>
+      layout(
+        'Virtual table',
+        `
+      <div data-testid="viewport" style="height:240px;overflow:auto"><div style="height:3000px">
+      <table><tbody>${Array.from({ length: 10 }, (_, i) => `<tr data-row-key="REQ${String(i + 1).padStart(3, '0')}"><td>REQ${String(i + 1).padStart(3, '0')}</td><td><span class="counter">0</span></td><td><button>Approve</button></td></tr>`).join('')}</tbody></table></div></div>
+      <output id="log">none</output><button id="live">Count 0</button>
+      <div id="shadow"><button slot="action">Slotted action</button></div>`,
+        undefined,
+        `
+      const viewport = document.querySelector('[data-testid=viewport]');
+      viewport.addEventListener('scroll', () => {
+        const start = Math.min(90, Math.floor(viewport.scrollTop / 50));
+        document.querySelectorAll('tr').forEach((row, i) => {
+          const key = 'REQ' + String(start + i + 1).padStart(3, '0');
+          row.dataset.rowKey = key; row.cells[0].textContent = key;
+        });
+      });
+      document.querySelectorAll('tr button').forEach(button => button.onclick = () => {
+        document.querySelector('#log').textContent = button.closest('tr').dataset.rowKey;
+      });
+      document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML = '<slot name="action"></slot><slot><button>Fallback action</button></slot>';
+      `,
+      ),
+    '/hostile': () =>
+      layout(
+        'Hostile page',
+        '<button id="danger">Delete everything</button><input id="ordinary" type="password" value="fixture-private-value"><output id="log">none</output>',
+        undefined,
+        `
+      const fake = {version:1, collect: () => ({nodes:[]}), describe: () => ({role:'button',name:'Harmless help'})};
+      try { window.__tgSnap = fake; } catch {}
+      try { Object.defineProperty(window, '__tgSnap', {value:fake}); } catch {}
+      try { window.__tgSnap.describe = fake.describe; } catch {}
+      Object.defineProperty(HTMLInputElement.prototype, 'type', {get: () => 'text'});
+      Element.prototype.getAttribute = () => null;
+      Object.defineProperty(HTMLElement.prototype, 'innerText', {get: () => 'Harmless help'});
+      Map.prototype.get = () => document.querySelector('#danger');
+      WeakMap.prototype.get = () => 'e1';
+      document.querySelector('#danger').onclick = () => document.querySelector('#log').textContent = 'deleted';
+      `,
+      ),
     '/': (req, user) =>
       layout(
         'Home',
@@ -321,6 +364,86 @@ document.getElementById('go').onclick = async () => {
         return json(res, 200, ['Alpha', 'Bravo', 'Charlie']);
       }
       if (p === '/api/broken') return json(res, 500, { error: 'Internal failure' });
+      // --- policy-gate fixtures start ---
+      // Destructive controls reachable by click, keyboard, implicit form submission, select, check and drag.
+      // Every activation is recorded in #log (and the form submits for real to /policy-gate/submitted).
+      if (p === '/policy-gate') {
+        return send(
+          res,
+          200,
+          layout(
+            'Policy gate',
+            `<h1>Account settings</h1>
+<p>Log: <output id="log"></output></p>
+<button id="del" type="button" onclick="hit('button')">Delete account</button>
+<button id="safe" type="button" onclick="hit('safe-button')">Save profile</button>
+<form id="close-form" method="post" action="/policy-gate/submitted">
+  <label for="reason">Reason</label><input id="reason" name="reason">
+  <button type="submit">Delete account permanently</button>
+</form>
+<form id="search-form" onsubmit="event.preventDefault(); hit('search')">
+  <label for="q">Search</label><input id="q" name="q"><button>Search</button>
+</form>
+<label for="bulk">Bulk action</label>
+<select id="bulk" onchange="hit('select:' + this.value)"><option value="">Choose…</option><option value="archive">Archive</option><option value="delete">Delete selected</option></select>
+<label><input id="wipe" type="checkbox" onchange="hit('check')"> Remove my data</label>
+<div id="card" draggable="true" style="padding:8px;border:1px solid #888;width:120px">Report card</div>
+<div id="trash" role="region" aria-label="Delete bin" style="padding:24px;border:2px dashed #c00;width:160px;margin-top:8px">Delete bin</div>`,
+            undefined,
+            `function hit(w){ const o = document.getElementById('log'); o.textContent += w + ';'; }
+document.getElementById('trash').addEventListener('dragover', (e) => e.preventDefault());
+document.getElementById('trash').addEventListener('drop', (e) => { e.preventDefault(); hit('drop'); });`,
+          ),
+        );
+      }
+      if (p === '/policy-gate/submitted') {
+        return send(res, 200, layout('Account deleted', '<h1>Account deleted</h1>', undefined));
+      }
+      // --- end ---
+      // --- combobox-ambiguity fixtures start (D18) ---
+      if (p === '/combobox-ambiguous') {
+        return send(
+          res,
+          200,
+          layout(
+            'Combobox ambiguity',
+            `<h1>Transfer</h1>
+<label id="acct-label">Account</label>
+<div class="combo" id="acct" role="combobox" tabindex="0" aria-labelledby="acct-label" aria-haspopup="listbox" aria-expanded="false" aria-controls="acct-list">Choose…</div>
+<ul id="acct-list" role="listbox" class="hidden" aria-label="Account options"><li role="option">Savings Account</li><li role="option">Checking Account</li><li role="option">Account Closure</li><li role="option">Loan</li><li role="option">Joint</li><li role="option">Joint</li></ul>`,
+            undefined,
+            `const c = document.getElementById('acct'), l = document.getElementById('acct-list');
+c.addEventListener('click', () => { const open = l.classList.toggle('hidden') === false; c.setAttribute('aria-expanded', String(open)); });
+l.addEventListener('click', (e) => { const o = e.target.closest('[role=option]'); if (!o) return;
+  c.textContent = o.textContent; l.classList.add('hidden'); c.setAttribute('aria-expanded', 'false'); });`,
+          ),
+        );
+      }
+      // --- end ---
+      // --- slow-submit fixtures start (TGB-007/009) ---
+      if (p === '/slow-submit') {
+        return send(
+          res,
+          200,
+          layout(
+            'Slow submit',
+            `<h1>Slow submit</h1><button id="go">Go</button><button id="noop">Noop</button><p id="st">idle</p>`,
+            undefined,
+            `document.getElementById('go').addEventListener('click', async () => {
+  document.getElementById('st').textContent = 'sending';
+  const r = await fetch('/api/slow-submit?ms=' + (new URLSearchParams(location.search).get('ms') || '3000'), { method: 'POST' });
+  document.getElementById('st').textContent = 'done ' + (await r.json()).n;
+});`,
+          ),
+        );
+      }
+      if (p === '/api/slow-submit' && req.method === 'POST') {
+        const n = ++slow.submits;
+        const ms = Math.min(Number(url.searchParams.get('ms') ?? 3000), 10_000);
+        setTimeout(() => json(res, 200, { n }), ms);
+        return;
+      }
+      // --- end ---
       if (p === '/redirect') {
         res.writeHead(302, { location: url.searchParams.get('to') ?? '/' });
         return res.end();
@@ -350,6 +473,7 @@ document.getElementById('go').onclick = async () => {
   return {
     server,
     requests,
+    slow,
     listen(port = 0) {
       return new Promise((resolve) =>
         server.listen(port, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)),

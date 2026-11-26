@@ -1,4 +1,6 @@
-import { IDEMPOTENT_ACTIONS, WorkflowSchema, type Workflow, type WorkflowInput } from './workflow-schema.js';
+import { classifyAction } from '../harness/action-classes.js';
+import { secretUsageErrors } from './secret-policy.js';
+import { WorkflowSchema, type Workflow, type WorkflowInput } from './workflow-schema.js';
 import { TgError } from '../shared/errors.js';
 import { SAFE_NAME } from '../shared/util.js';
 
@@ -32,8 +34,12 @@ function collectVars(v: unknown, out: Set<string>): void {
 }
 
 /** Static validation: schema, unique ids, dependency graph (no cycles/unknown), variables, inputs. */
-export function validateWorkflow(input: unknown, runtimeVars: string[] = []): ValidationResult {
-  const errors: string[] = [];
+export function validateWorkflow(
+  input: unknown,
+  runtimeVars: string[] = [],
+  options: { allowSecrets?: boolean } = {},
+): ValidationResult {
+  const errors: string[] = secretUsageErrors(input, options.allowSecrets ?? true);
   const warnings: string[] = [];
   const parsed = WorkflowSchema.safeParse(input);
   if (!parsed.success) {
@@ -70,7 +76,12 @@ export function validateWorkflow(input: unknown, runtimeVars: string[] = []): Va
     if (s.action === 'extract' && !s.extract) errors.push(`Step ${s.id}: extract action requires "extract"`);
     if (s.input.ref !== undefined)
       warnings.push(`Step ${s.id}: snapshot refs are not stable across runs; prefer role/label/testId`);
-    if (s.retry && s.retry.attempts > 0 && !s.idempotent && !IDEMPOTENT_ACTIONS.has(s.action)) {
+    const actionClass = classifyAction(s.action, s.input);
+    if (
+      s.retry &&
+      s.retry.attempts > 0 &&
+      (actionClass === 'high-impact' || (actionClass === 'non-idempotent' && !s.idempotent))
+    ) {
       warnings.push(
         `Step ${s.id}: retries are ignored for non-idempotent action "${s.action}" unless idempotent=true`,
       );
@@ -103,8 +114,12 @@ export function validateWorkflow(input: unknown, runtimeVars: string[] = []): Va
   return { valid: errors.length === 0, errors, warnings, ...(errors.length === 0 ? { workflow: wf } : {}) };
 }
 
-export function assertValidWorkflow(input: WorkflowInput | unknown, runtimeVars: string[] = []): Workflow {
-  const r = validateWorkflow(input, runtimeVars);
+export function assertValidWorkflow(
+  input: WorkflowInput | unknown,
+  runtimeVars: string[] = [],
+  options: { allowSecrets?: boolean } = {},
+): Workflow {
+  const r = validateWorkflow(input, runtimeVars, options);
   if (!r.valid || !r.workflow)
     throw new TgError('WORKFLOW_INVALID', `Invalid workflow: ${r.errors.join('; ')}`, {
       context: { errors: r.errors },

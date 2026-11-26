@@ -33,7 +33,11 @@ export const sessionTools = [
       });
       let extra = '';
       if (a.url) {
-        const r = await harness.actions.navigate(a.url, { session: s.name, snapshot: 'none' });
+        const r = await harness.actions.navigate(a.url, {
+          session: s.name,
+          project: s.project,
+          snapshot: 'none',
+        });
         extra = `\n${r.message}`;
       }
       return text(
@@ -119,7 +123,7 @@ export const sessionTools = [
       const s = await harness.sessions.restore(a.name, a.project);
       let extra = '';
       if (a.url)
-        extra = `\n${(await harness.actions.navigate(a.url, { session: s.name, snapshot: 'none' })).message}`;
+        extra = `\n${(await harness.actions.navigate(a.url, { session: s.name, project: s.project, snapshot: 'none' })).message}`;
       return text(`✓ Restored session "${s.name}"${extra}`);
     },
   }),

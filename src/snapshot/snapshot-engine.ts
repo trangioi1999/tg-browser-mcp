@@ -1,6 +1,9 @@
+import { TgError } from '../shared/errors.js';
+import { crossCheckDescription, isSensitiveDescription } from './guard.js';
 import type { Frame, Page } from 'playwright';
 import {
   collectScriptSource,
+  snapshotAccessKey,
   installScriptSource,
   type CollectArgs,
   type CollectResult,
@@ -77,7 +80,13 @@ const ORIENTATION_ROLES = new Set([
 ]);
 
 async function ensureInstalled(frame: Frame): Promise<void> {
-  await frame.evaluate(installScriptSource());
+  try {
+    await frame.evaluate(installScriptSource());
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.includes('TARGET_CHANGED'))
+      throw new TgError('TARGET_CHANGED', 'Untrusted snapshot engine installation', { cause });
+    throw cause;
+  }
 }
 
 async function collectFrame(
@@ -89,18 +98,48 @@ async function collectFrame(
 ): Promise<{ nodes: RawNode[]; docId: string; meta: CollectResult } | undefined> {
   try {
     await ensureInstalled(frame);
-    const res = (await frame.evaluate(
-      collectScriptSource({ ...args, nextIndex: refs.nextIndex }),
-    )) as CollectResult;
+    const res = JSON.parse(
+      await frame.evaluate<string>(collectScriptSource({ ...args, nextIndex: refs.nextIndex })),
+    ) as CollectResult;
     refs.nextIndex = res.nextIndex;
-    const register = (nodes: RawNode[]) => {
+    const register = async (nodes: RawNode[]): Promise<void> => {
       for (const n of nodes) {
+        if (n.value !== undefined && n.description && n.ref) {
+          // Utility-world attribute reads also protect late installation in an
+          // already-loaded document, where page prototypes may already be hostile.
+          const handle = await frame.evaluateHandle(
+            ([ref, key]) =>
+              (window as unknown as { __tgSnap: { get(r: string, k: string): Element | null } }).__tgSnap.get(
+                ref,
+                key,
+              ),
+            [n.ref, snapshotAccessKey] as const,
+          );
+          try {
+            const el = handle.asElement();
+            if (!el) n.value = '••••';
+            else {
+              const desc = await crossCheckDescription(el, n.description, frame);
+              if (isSensitiveDescription(desc, args.sensitiveKeys)) n.value = '••••';
+            }
+          } finally {
+            await handle.dispose();
+          }
+        }
         if (n.ref)
-          refs.set({ ref: n.ref, frame, docId: res.docId, role: n.role, name: n.name ?? '', snapshotId });
-        if (n.children) register(n.children);
+          refs.set({
+            ref: n.ref,
+            frame,
+            docId: res.docId,
+            role: n.role,
+            name: n.name ?? '',
+            guard: n.guard,
+            snapshotId,
+          });
+        if (n.children) await register(n.children);
       }
     };
-    register(res.nodes);
+    await register(res.nodes);
     // Splice child frame snapshots into their <iframe> slots.
     if (depthBudget > 0) {
       for (const child of frame.childFrames()) {
@@ -108,10 +147,12 @@ async function collectFrame(
         let slotRef: string | undefined;
         try {
           const fe = await child.frameElement();
-          slotRef = await fe.evaluate((el: Node) =>
-            (window as unknown as { __tgSnap?: { refOf(e: Element): string | undefined } }).__tgSnap?.refOf(
-              el as Element,
-            ),
+          slotRef = await fe.evaluate(
+            (el: Node, key: string) =>
+              (
+                window as unknown as { __tgSnap?: { refOf(e: Element, key: string): string | undefined } }
+              ).__tgSnap?.refOf(el as Element, key),
+            snapshotAccessKey,
           );
           await fe.dispose();
         } catch {
@@ -130,8 +171,19 @@ async function collectFrame(
       }
     }
     return { nodes: res.nodes, docId: res.docId, meta: res };
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof TgError) throw error;
+    // Only transient navigation failures may be retried. A broken/tampered
+    // collection must not masquerade as a successful empty snapshot.
+    if (
+      error instanceof Error &&
+      /execution context was destroyed|cannot find context|frame was detached/i.test(error.message)
+    )
+      return undefined;
+    throw new TgError('ACTION_FAILED', 'Snapshot collection failed', {
+      cause: error,
+      suggestion: 'Re-snapshot the page. If this persists, reload it in a fresh session.',
+    });
   }
 }
 

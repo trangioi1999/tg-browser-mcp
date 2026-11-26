@@ -54,7 +54,7 @@ export interface HarnessEventMap {
     runId: string;
     workflow: string;
   };
-  'workflow.step': { runId: string; stepId: string; status: 'passed' | 'failed' | 'skipped' };
+  'workflow.step': { runId: string; stepId: string; status: 'passed' | 'failed' | 'skipped' | 'cancelled' };
   'workflow.completed': {
     sessions?: Array<{ sessionId: string; name: string; project: string }>;
     runId: string;

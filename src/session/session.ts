@@ -3,6 +3,7 @@ import { RefRegistry } from '../snapshot/element-reference.js';
 import type { Snapshot } from '../snapshot/snapshot-engine.js';
 import type { NetworkMonitor } from '../network/network-monitor.js';
 import { TgError } from '../shared/errors.js';
+import { AsyncLock } from '../shared/async-lock.js';
 
 export interface PendingDialog {
   type: string;
@@ -13,6 +14,8 @@ export interface PendingDialog {
 
 export class PageState {
   readonly refs = new RefRegistry();
+  /** Serializes actions, snapshots and ref-resolving inspections on this page (TGB-009). */
+  readonly lock = new AsyncLock();
   lastSnapshot: Snapshot | undefined;
   activeFrame: Frame | undefined;
   pendingDialog: PendingDialog | undefined;

@@ -5,7 +5,19 @@
  * no TypeScript helpers that emit runtime code.
  */
 
+export interface RefGuard {
+  role: string;
+  tag: string;
+  inputType?: string;
+  name: string;
+  keys: Record<string, string>;
+  container?: string;
+  rowKey?: string;
+}
+
 export interface RawNode {
+  guard?: RefGuard;
+  description?: ElementDescription;
   ref?: string;
   role: string;
   name?: string;
@@ -49,6 +61,8 @@ export interface ElementDescription {
   id?: string;
   label?: string;
   inputType?: string;
+  guard?: RefGuard;
+  warning?: string;
   connected: boolean;
   native?: 'select' | 'input' | 'textarea' | 'other';
   multiple?: boolean;
@@ -56,9 +70,73 @@ export interface ElementDescription {
 }
 
 /** Installs (idempotently) the TG snapshot engine into the current document. */
-export function tgInstall(): void {
+export function tgInstall(nonce: string, accessKey: string): void {
   const w = window as any;
-  if (w.__tgSnap && w.__tgSnap.version === 1) return;
+  if ('__tgSnap' in w) {
+    if (w.__tgSnap?.nonce === nonce) return;
+    throw new Error('TARGET_CHANGED: untrusted snapshot engine; re-snapshot in a fresh document');
+  }
+  // Capture native reads before page scripts run. This is defense in depth, not a
+  // security boundary: a page can still change its actual DOM/labels, including
+  // between verification and dispatch. Already-loaded documents are less trusted.
+  const getComputedStyle = window.getComputedStyle.bind(window);
+  const attr = Function.prototype.call.bind(Element.prototype.getAttribute) as (
+    e: Element,
+    n: string,
+  ) => string | null;
+  const query = Function.prototype.call.bind(Element.prototype.querySelector) as (
+    e: Element,
+    s: string,
+  ) => Element | null;
+  const closest = Function.prototype.call.bind(Element.prototype.closest) as (
+    e: Element,
+    s: string,
+  ) => Element | null;
+  const inputType = Function.prototype.call.bind(
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'type')!.get!,
+  ) as (e: Element) => string;
+  const innerText = Function.prototype.call.bind(
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText')!.get!,
+  ) as (e: Element) => string;
+  const textContent = Function.prototype.call.bind(
+    Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')!.get!,
+  ) as (e: Node) => string;
+  const inputLabels = Function.prototype.call.bind(
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'labels')!.get!,
+  );
+  const selectLabels = Function.prototype.call.bind(
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'labels')!.get!,
+  );
+  const textareaLabels = Function.prototype.call.bind(
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'labels')!.get!,
+  );
+  const inputValue = Function.prototype.call.bind(
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.get!,
+  ) as (e: Element) => string;
+  const labelsOf = (el: Element): NodeListOf<HTMLLabelElement> | undefined =>
+    el.tagName === 'INPUT'
+      ? inputLabels(el)
+      : el.tagName === 'SELECT'
+        ? selectLabels(el)
+        : el.tagName === 'TEXTAREA'
+          ? textareaLabels(el)
+          : undefined;
+  const mapGet = Function.prototype.call.bind(Map.prototype.get);
+  const mapSize = Function.prototype.call.bind(Object.getOwnPropertyDescriptor(Map.prototype, 'size')!.get!);
+  const mapForEach = Function.prototype.call.bind(Map.prototype.forEach);
+  const mapDelete = Function.prototype.call.bind(Map.prototype.delete);
+  const mapSet = Function.prototype.call.bind(Map.prototype.set);
+  const weakGet = Function.prototype.call.bind(WeakMap.prototype.get);
+  const weakSet = Function.prototype.call.bind(WeakMap.prototype.set);
+  // Playwright's main-world return-value serializer uses Map.prototype.get.
+  // A page can poison that serializer even though our own maps use captured
+  // methods. Cross the value boundary as a primitive string, then parse in Node.
+  const stringify = JSON.stringify;
+  const freeze = Object.freeze;
+  const defineProperty = Object.defineProperty;
+  const authorize = (key: string) => {
+    if (key !== accessKey) throw new Error('Unauthorized snapshot access');
+  };
 
   const INTERACTIVE = new Set([
     'button',
@@ -164,7 +242,7 @@ export function tgInstall(): void {
   }
 
   function implicitRole(el: Element): string {
-    const explicit = el.getAttribute('role');
+    const explicit = attr(el, 'role');
     if (explicit) {
       const first = explicit.trim().split(/\s+/)[0]!.toLowerCase();
       if (first === 'presentation' || first === 'none') return '';
@@ -180,10 +258,10 @@ export function tgInstall(): void {
       case 'summary':
         return 'button';
       case 'input': {
-        const t = ((el as HTMLInputElement).type || 'text').toLowerCase();
+        const t = inputType(el).toLowerCase();
         if (t === 'hidden') return '';
         if (['button', 'submit', 'reset', 'image'].includes(t)) return 'button';
-        if (t === 'checkbox') return el.getAttribute('switch') !== null ? 'switch' : 'checkbox';
+        if (t === 'checkbox') return attr(el, 'switch') !== null ? 'switch' : 'checkbox';
         if (t === 'radio') return 'radio';
         if (t === 'range') return 'slider';
         if (t === 'number') return 'spinbutton';
@@ -208,7 +286,7 @@ export function tgInstall(): void {
       case 'h6':
         return 'heading';
       case 'img':
-        return el.getAttribute('alt') === '' ? '' : 'img';
+        return attr(el, 'alt') === '' ? '' : 'img';
       case 'nav':
         return 'navigation';
       case 'main':
@@ -235,7 +313,7 @@ export function tgInstall(): void {
       case 'tr':
         return 'row';
       case 'th':
-        return el.closest('thead') || el.getAttribute('scope') === 'col' ? 'columnheader' : 'rowheader';
+        return closest(el, 'thead') || attr(el, 'scope') === 'col' ? 'columnheader' : 'rowheader';
       case 'td':
         return 'cell';
       case 'ul':
@@ -262,7 +340,7 @@ export function tgInstall(): void {
       case 'hr':
         return '';
       case 'svg':
-        return el.getAttribute('aria-label') ? 'img' : '';
+        return attr(el, 'aria-label') ? 'img' : '';
     }
     if ((el as HTMLElement).isContentEditable && !(el.parentElement as HTMLElement | null)?.isContentEditable)
       return 'textbox';
@@ -271,12 +349,11 @@ export function tgInstall(): void {
 
   function textOf(el: Element): string {
     // innerText respects CSS visibility; fall back to textContent for non-rendered nodes.
-    const h = el as HTMLElement;
-    return norm(typeof h.innerText === 'string' ? h.innerText : el.textContent);
+    return norm(el instanceof HTMLElement ? innerText(el) : textContent(el));
   }
 
-  function byIds(el: Element, attr: string): string {
-    const ids = el.getAttribute(attr);
+  function byIds(el: Element, attribute: string): string {
+    const ids = attr(el, attribute);
     if (!ids) return '';
     const root = el.getRootNode() as Document | ShadowRoot;
     return norm(
@@ -290,7 +367,8 @@ export function tgInstall(): void {
   }
 
   function hasInteractiveDescendant(el: Element): boolean {
-    return !!el.querySelector(
+    return !!query(
+      el,
       'a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox],[tabindex]:not([tabindex="-1"])',
     );
   }
@@ -298,38 +376,36 @@ export function tgInstall(): void {
   function accName(el: Element, role: string): string {
     const lb = byIds(el, 'aria-labelledby');
     if (lb) return lb;
-    const al = norm(el.getAttribute('aria-label'));
+    const al = norm(attr(el, 'aria-label'));
     if (al) return al;
     const tag = el.tagName.toLowerCase();
     if (tag === 'input' || tag === 'select' || tag === 'textarea') {
-      const input = el as HTMLInputElement;
-      const t = (input.type || '').toLowerCase();
+      const t = (el.tagName === 'INPUT' ? inputType(el) : '').toLowerCase();
       if (['button', 'submit', 'reset'].includes(t))
-        return norm(input.value) || (t === 'submit' ? 'Submit' : t === 'reset' ? 'Reset' : '');
-      if (t === 'image') return norm(input.alt) || 'Submit';
-      const labels = input.labels
-        ? Array.from(input.labels)
+        return norm(inputValue(el)) || (t === 'submit' ? 'Submit' : t === 'reset' ? 'Reset' : '');
+      if (t === 'image') return norm(attr(el, 'alt')) || 'Submit';
+      const labels = labelsOf(el)
+        ? Array.from(labelsOf(el)!)
             .map((l) => textOf(l))
             .filter(Boolean)
         : [];
       if (labels.length) return labels.join(' ');
-      return norm(el.getAttribute('title')) || norm(el.getAttribute('placeholder'));
+      return norm(attr(el, 'title')) || norm(attr(el, 'placeholder'));
     }
-    if (tag === 'img' || tag === 'area')
-      return norm(el.getAttribute('alt')) || norm(el.getAttribute('title'));
+    if (tag === 'img' || tag === 'area') return norm(attr(el, 'alt')) || norm(attr(el, 'title'));
     if (tag === 'fieldset') {
-      const lg = el.querySelector(':scope > legend');
+      const lg = query(el, ':scope > legend');
       if (lg) return textOf(lg);
     }
     if (tag === 'table') {
-      const cap = el.querySelector(':scope > caption');
+      const cap = query(el, ':scope > caption');
       if (cap) return textOf(cap);
     }
     if (tag === 'figure') {
-      const fc = el.querySelector(':scope > figcaption');
+      const fc = query(el, ':scope > figcaption');
       if (fc) return textOf(fc);
     }
-    if (tag === 'iframe') return norm(el.getAttribute('title')) || norm(el.getAttribute('name'));
+    if (tag === 'iframe') return norm(attr(el, 'title')) || norm(attr(el, 'name'));
     if (NAME_FROM_CONTENT.has(role)) {
       if (
         role !== 'button' &&
@@ -343,24 +419,23 @@ export function tgInstall(): void {
       const t = textOf(el);
       if (t) return t;
     }
-    return norm(el.getAttribute('title'));
+    return norm(attr(el, 'title'));
   }
 
   function isSensitive(el: Element, keys: string[]): boolean {
-    const input = el as HTMLInputElement;
-    if ((input.type || '').toLowerCase() === 'password') return true;
-    const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+    if ((el.tagName === 'INPUT' ? inputType(el) : '').toLowerCase() === 'password') return true;
+    const ac = (attr(el, 'autocomplete') || '').toLowerCase();
     if (/cc-|one-time-code|current-password|new-password/.test(ac)) return true;
     const hay =
-      `${el.getAttribute('name') || ''} ${el.id || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('data-sensitive') !== null ? 'sensitive' : ''}`.toLowerCase();
+      `${attr(el, 'name') || ''} ${attr(el, 'id') || ''} ${attr(el, 'aria-label') || ''} ${attr(el, 'data-sensitive') !== null ? 'sensitive' : ''}`.toLowerCase();
     return keys.some((k) => k && hay.includes(k));
   }
 
   function states(el: Element, role: string): string[] {
     const out: string[] = [];
     const h = el as HTMLInputElement;
-    const aria = (n: string) => el.getAttribute(`aria-${n}`);
-    if (h.disabled || aria('disabled') === 'true' || el.closest('fieldset[disabled]')) out.push('disabled');
+    const aria = (n: string) => attr(el, `aria-${n}`);
+    if (h.disabled || aria('disabled') === 'true' || closest(el, 'fieldset[disabled]')) out.push('disabled');
     if (
       role === 'checkbox' ||
       role === 'radio' ||
@@ -385,7 +460,7 @@ export function tgInstall(): void {
     if (aria('current') && aria('current') !== 'false') out.push('current');
     if (aria('busy') === 'true') out.push('busy');
     if (
-      el.getAttribute('aria-modal') === 'true' ||
+      attr(el, 'aria-modal') === 'true' ||
       (el.tagName === 'DIALOG' && (el as HTMLDialogElement).open && el.matches(':modal'))
     )
       out.push('modal');
@@ -398,7 +473,7 @@ export function tgInstall(): void {
     const tag = el.tagName.toLowerCase();
     let v: string | undefined;
     if (tag === 'input' || tag === 'textarea') {
-      const t = ((el as HTMLInputElement).type || '').toLowerCase();
+      const t = tag === 'input' ? inputType(el).toLowerCase() : '';
       if (['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file'].includes(t)) {
         if (t === 'file') {
           const files = (el as HTMLInputElement).files;
@@ -420,7 +495,7 @@ export function tgInstall(): void {
       role === 'progressbar' ||
       role === 'meter'
     ) {
-      v = el.getAttribute('aria-valuetext') || el.getAttribute('aria-valuenow') || undefined;
+      v = attr(el, 'aria-valuetext') || attr(el, 'aria-valuenow') || undefined;
       if (role === 'combobox' && !v) {
         // Custom comboboxes (mat-select, p-select) render the selected value as text content.
         const t = textOf(el);
@@ -433,11 +508,11 @@ export function tgInstall(): void {
   }
 
   function refFor(el: Element, counter: { n: number }): string {
-    let r = st.ids.get(el);
-    if (!r || st.map.get(r) !== el) {
+    let r = weakGet(st.ids, el);
+    if (!r || mapGet(st.map, r) !== el) {
       r = `e${counter.n++}`;
-      st.ids.set(el, r);
-      st.map.set(r, el);
+      weakSet(st.ids, el, r);
+      mapSet(st.map, r, el);
     }
     return r;
   }
@@ -474,9 +549,10 @@ export function tgInstall(): void {
       const host = parent instanceof Element ? parent : null;
       const kids: Node[] = [];
       if (host && host.shadowRoot) kids.push(...Array.from(host.shadowRoot.childNodes));
-      if (host && host.tagName === 'SLOT')
-        kids.push(...(host as HTMLSlotElement).assignedNodes({ flatten: true }));
-      else kids.push(...Array.from(parent.childNodes));
+      else if (host && host.tagName === 'SLOT') {
+        const assigned = (host as HTMLSlotElement).assignedNodes({ flatten: true });
+        kids.push(...(assigned.length ? assigned : Array.from(host.childNodes)));
+      } else kids.push(...Array.from(parent.childNodes));
       for (const k of kids) {
         if (nodeCount >= args.maxNodes) {
           truncated = true;
@@ -505,13 +581,13 @@ export function tgInstall(): void {
         tag === 'link'
       )
         return [];
-      if (el.getAttribute('aria-hidden') === 'true') return [];
+      if (attr(el, 'aria-hidden') === 'true') return [];
       if (el.hasAttribute('inert')) return [];
       const style = getComputedStyle(el);
       if (style.display === 'none') return [];
       if (tag === 'dialog' && !(el as HTMLDialogElement).open) return [];
       if (tag === 'details' && !(el as HTMLDetailsElement).open) {
-        const summary = el.querySelector(':scope > summary');
+        const summary = query(el, ':scope > summary');
         return summary ? walk(summary, depth, suppressText) : [];
       }
       const hiddenSelf = style.visibility === 'hidden' || style.visibility === 'collapse';
@@ -534,6 +610,8 @@ export function tgInstall(): void {
 
       nodeCount++;
       const node: RawNode = { role, ref: refFor(el, counter) };
+      node.guard = guard(el);
+      node.description = describe(el);
       const name = accName(el, role);
       if (name)
         node.name =
@@ -541,7 +619,7 @@ export function tgInstall(): void {
       const s = states(el, role);
       if (s.length) node.states = s;
       if (role === 'heading') {
-        const lvl = el.getAttribute('aria-level') || (/^h[1-6]$/.test(tag) ? tag.slice(1) : '');
+        const lvl = attr(el, 'aria-level') || (/^h[1-6]$/.test(tag) ? tag.slice(1) : '');
         if (lvl) node.level = Number(lvl);
       }
       const v = valueOf(el, role, keys, args.maxTextLength);
@@ -556,10 +634,7 @@ export function tgInstall(): void {
       }
       // Name already carries the text content: do not repeat descendant text.
       const nameFromContent =
-        !!name &&
-        NAME_FROM_CONTENT.has(role) &&
-        !el.getAttribute('aria-label') &&
-        !el.getAttribute('aria-labelledby');
+        !!name && NAME_FROM_CONTENT.has(role) && !attr(el, 'aria-label') && !attr(el, 'aria-labelledby');
       if (
         role === 'textbox' ||
         role === 'searchbox' ||
@@ -578,7 +653,7 @@ export function tgInstall(): void {
     let root: Element | null = document.body ?? document.documentElement;
     let scopeMissing = false;
     if (args.scopeRef) {
-      const s = st.map.get(args.scopeRef);
+      const s = mapGet(st.map, args.scopeRef);
       if (s && s.isConnected) root = s;
       else scopeMissing = true;
     }
@@ -589,7 +664,10 @@ export function tgInstall(): void {
           : mergeText(walkChildren(root, 0, false))
         : [];
     // Drop map entries for detached elements to avoid leaks on long-lived SPAs.
-    if (st.map.size > 20000) for (const [r, e] of st.map) if (!e.isConnected) st.map.delete(r);
+    if (mapSize(st.map) > 20000)
+      mapForEach(st.map, (e: Element, r: string) => {
+        if (!e.isConnected) mapDelete(st.map, r);
+      });
 
     let framework: string | undefined;
     const ngv = document.querySelector('[ng-version]');
@@ -618,17 +696,48 @@ export function tgInstall(): void {
     };
   }
 
+  function guard(el: Element): RefGuard {
+    const role = implicitRole(el) || 'generic';
+    const keys: Record<string, string> = {};
+    for (const key of ['data-testid', 'data-test-id', 'data-test', 'formcontrolname', 'name', 'id']) {
+      const value = attr(el, key);
+      if (value) keys[key] = value;
+    }
+    const row = closest(el, 'tr,[role=row],[data-row-key]');
+    const cell = row && query(row, '[role=rowheader],th,td,[role=cell],[role=gridcell]');
+    const rowKey = row
+      ? norm(attr(row, 'data-row-key') || (cell ? textOf(cell) : '')).slice(0, 80)
+      : undefined;
+    const container = closest(
+      el,
+      'form,dialog,[role=form],[role=dialog],[role=alertdialog],[role=region],section[aria-label],section[aria-labelledby]',
+    );
+    return {
+      role,
+      tag: el.tagName.toLowerCase(),
+      name: accName(el, role),
+      keys,
+      ...(el.tagName === 'INPUT' ? { inputType: inputType(el) } : {}),
+      ...(rowKey !== undefined ? { rowKey } : {}),
+      ...(container
+        ? {
+            container: `${implicitRole(container)}:${accName(container, implicitRole(container))}:${attr(container, 'id') || ''}`,
+          }
+        : {}),
+    };
+  }
+
   function describe(el: Element): ElementDescription {
     const role = implicitRole(el) || 'generic';
     const tag = el.tagName.toLowerCase();
-    const input = el as HTMLInputElement;
-    const labels = input.labels
-      ? Array.from(input.labels)
+    const labels = labelsOf(el)
+      ? Array.from(labelsOf(el)!)
           .map((l) => textOf(l))
           .filter(Boolean)
       : [];
     const d: ElementDescription = {
       role,
+      guard: guard(el),
       name: accName(el, role),
       tag,
       connected: el.isConnected,
@@ -636,38 +745,48 @@ export function tgInstall(): void {
         tag === 'select' ? 'select' : tag === 'input' ? 'input' : tag === 'textarea' ? 'textarea' : 'other',
       editable: tag === 'input' || tag === 'textarea' || (el as HTMLElement).isContentEditable,
     };
-    const tid =
-      el.getAttribute('data-testid') || el.getAttribute('data-test-id') || el.getAttribute('data-test');
+    const tid = attr(el, 'data-testid') || attr(el, 'data-test-id') || attr(el, 'data-test');
     if (tid) d.testId = tid;
-    const ph = el.getAttribute('placeholder');
+    const ph = attr(el, 'placeholder');
     if (ph) d.placeholder = ph;
-    if (el.id && /^[A-Za-z][\w-]*$/.test(el.id)) d.id = el.id;
+    const id = attr(el, 'id');
+    if (id && /^[A-Za-z][\w-]*$/.test(id)) d.id = id;
     if (labels.length) d.label = labels.join(' ');
-    if (tag === 'input') d.inputType = (input.type || 'text').toLowerCase();
+    if (tag === 'input') d.inputType = inputType(el).toLowerCase();
     if (tag === 'select') d.multiple = (el as HTMLSelectElement).multiple;
     return d;
   }
 
-  w.__tgSnap = {
-    ...st,
-    collect,
-    describe,
-    get(ref: string): Element | null {
-      const e = st.map.get(ref);
-      return e && e.isConnected ? e : null;
-    },
-    refOf(el: Element): string | undefined {
-      return st.ids.get(el);
-    },
-  };
-  Object.defineProperty(w, '__tgSnap', {
+  defineProperty(w, '__tgSnap', {
     enumerable: false,
-    configurable: true,
-    writable: true,
-    value: w.__tgSnap,
+    configurable: false,
+    writable: false,
+    value: freeze({
+      nonce,
+      docId: st.docId,
+      collect(args: CollectArgs, key: string) {
+        authorize(key);
+        return stringify(collect(args));
+      },
+      describe(el: Element, key: string) {
+        authorize(key);
+        return stringify(describe(el));
+      },
+      get(ref: string, key: string): Element | null {
+        authorize(key);
+        const e = mapGet(st.map, ref);
+        return e && e.isConnected ? e : null;
+      },
+      refOf(el: Element, key: string): string | undefined {
+        authorize(key);
+        return weakGet(st.ids, el);
+      },
+    }),
   });
 }
 
+export const snapshotNonce = crypto.randomUUID();
+export const snapshotAccessKey = crypto.randomUUID();
 let installScript: string | undefined;
 
 /**
@@ -676,10 +795,10 @@ let installScript: string | undefined;
  * serialized function independent of the toolchain that compiled it.
  */
 export function installScriptSource(): string {
-  installScript ??= `(() => { const __name = (f) => f; (${tgInstall.toString()})(); })()`;
+  installScript ??= `(() => { const __name = (f) => f; (${tgInstall.toString()})(${JSON.stringify(snapshotNonce)}, ${JSON.stringify(snapshotAccessKey)}); })()`;
   return installScript;
 }
 
 export function collectScriptSource(args: CollectArgs): string {
-  return `window.__tgSnap.collect(${JSON.stringify(args)})`;
+  return `window.__tgSnap.collect(${JSON.stringify(args)}, ${JSON.stringify(snapshotAccessKey)})`;
 }
