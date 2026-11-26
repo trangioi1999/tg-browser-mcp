@@ -53,7 +53,7 @@ export class WorkflowRecorder {
     if (r.sessions && !r.sessions.has(a.session)) return;
     const action = ACTION_MAP[a.action];
     if (!action) return;
-    const input: Record<string, unknown> = { ...(a.target ?? {}), ...a.input };
+    const input: Record<string, unknown> = { ...structuredClone(a.target ?? {}), ...a.input };
     if (a.sensitive) {
       const key =
         String(a.target?.label ?? a.target?.name ?? 'value')

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ToolProfileSchema = z.enum(['minimal', 'developer', 'testing', 'full']);
+export const ToolProfileSchema = z.enum(['minimal', 'core', 'developer', 'testing', 'full']);
 export type ToolProfile = z.infer<typeof ToolProfileSchema>;
 
 export const BrowserConfigSchema = z.object({

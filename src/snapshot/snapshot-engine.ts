@@ -27,6 +27,8 @@ export interface SnapshotOptions {
 }
 
 export interface Snapshot {
+  /** False when collection or presentation omitted part of the observable page. */
+  complete?: boolean;
   id: number;
   url: string;
   title: string;
@@ -39,6 +41,7 @@ export interface Snapshot {
 }
 
 export interface FormattedSnapshot {
+  complete: boolean;
   text: string;
   page: number;
   totalPages: number;
@@ -143,7 +146,10 @@ async function collectFrame(
     // Splice child frame snapshots into their <iframe> slots.
     if (depthBudget > 0) {
       for (const child of frame.childFrames()) {
-        if (child.isDetached()) continue;
+        if (child.isDetached()) {
+          res.complete = false;
+          continue;
+        }
         let slotRef: string | undefined;
         try {
           const fe = await child.frameElement();
@@ -159,7 +165,10 @@ async function collectFrame(
           slotRef = undefined;
         }
         const slot = slotRef ? findNode(res.nodes, slotRef) : undefined;
-        if (!slot) continue;
+        if (!slot) {
+          res.complete = false;
+          continue;
+        }
         const sub = await collectFrame(
           child,
           refs,
@@ -167,9 +176,13 @@ async function collectFrame(
           snapshotId,
           depthBudget - 1,
         );
+        if (!sub?.meta.complete) res.complete = false;
+        if (sub?.meta.truncatedByNodeLimit) res.truncatedByNodeLimit = true;
+        if (sub) res.nodeCount += sub.meta.nodeCount;
         if (sub && sub.nodes.length) slot.children = sub.nodes;
       }
     }
+    if (depthBudget <= 0 && frame.childFrames().length) res.complete = false;
     return { nodes: res.nodes, docId: res.docId, meta: res };
   } catch (error) {
     if (error instanceof TgError) throw error;
@@ -227,6 +240,7 @@ export async function captureSnapshot(
   let nodes = res?.nodes ?? [];
   if (opts.interactiveOnly) nodes = filterInteractive(nodes);
   return {
+    complete: !!res?.meta.complete && !opts.interactiveOnly && opts.includeText,
     id: snapshotId,
     url: page.url(),
     title: res?.meta.title ?? (await page.title().catch(() => '')),
@@ -289,11 +303,13 @@ export function formatSnapshot(
   const budget = Math.max(500, opts.maxChars - header.join('\n').length - 120);
   const pages: string[][] = [[]];
   let size = 0;
+  let clipped = false;
   for (const l of lines) {
     if (size + l.length + 1 > budget && pages[pages.length - 1]!.length) {
       pages.push([]);
       size = 0;
     }
+    if (l.length > budget) clipped = true;
     pages[pages.length - 1]!.push(l.length > budget ? `${l.slice(0, budget - 1)}…` : l);
     size += l.length + 1;
   }
@@ -304,8 +320,10 @@ export function formatSnapshot(
     totalPages > 1
       ? `\n[snapshot page ${page}/${totalPages} — call browser_snapshot with page=${page + 1 <= totalPages ? page + 1 : 1} for more, or scope=<ref>]`
       : '';
+  const complete = s.complete === true && totalPages === 1 && !clipped;
+  header.push(`Complete: ${complete}`);
   const text = `${opts.header === false ? '' : `${header.join('\n')}\n\n`}${body}${footer}`;
-  return { text, page, totalPages, chars: text.length };
+  return { text, page, totalPages, chars: text.length, complete };
 }
 
 export { diffSnapshots, type SnapshotDiff };

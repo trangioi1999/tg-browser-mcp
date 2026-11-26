@@ -305,6 +305,15 @@ document.getElementById('go').onclick = async () => {
       const user = userOf(req);
       const p = url.pathname;
 
+      if (p === '/duplicates')
+        return send(
+          res,
+          200,
+          `<!doctype html><title>Duplicates</title>
+        <form aria-label="First" data-testid="first"><label>Name<input></label><button type="button" onclick="this.dataset.clicked='yes'">Save</button></form>
+        <form aria-label="Second" data-testid="second"><label>Name<input></label><button type="button" onclick="this.dataset.clicked='yes'">Save</button></form>`,
+        );
+
       if (p === '/api/login' && req.method === 'POST') {
         const { username, password } = await body(req);
         const u = USERS[username];

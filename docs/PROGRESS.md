@@ -78,3 +78,42 @@ See docs/SECURITY.md (limitations) and docs/SESSIONS.md (storage). Only Chrome w
 1. Push to a Git remote and let CI run the Windows/Linux/Node 20–24 matrix.
 2. Connect from Claude Code/Codex with `.mcp.json` and try the maker-checker prompt on the fixture app.
 3. Publish to npm; then build the TG Studio event consumer.
+
+## V2 Phase 1 — lane C
+
+TGB-017 implemented: container-scoped `within` targets through the shared target
+schema; recorder container selection and escaped generator chaining; atomic,
+project-scoped session leases with `SESSION_BUSY` and run cleanup; the opt-in
+13-tool `core` profile; snapshot completeness through collection and formatting.
+Added a `/duplicates` fixture and unit/integration coverage for target ambiguity,
+scoped recording/replay, leases, generation safety, profile selection and partial
+snapshots. Configuration, workflow and generated tool docs updated.
+
+Minimal cross-lane edits: `action-executor.ts` forwards recorded scopes and the
+formatted completeness flag; `workflow-engine.ts` acquires/releases leases and
+preserves `within` in its target-key list; `tool-registry.ts` selects the core set;
+`shared/errors.ts` adds `SESSION_BUSY`; `scripts/gen-tool-docs.ts` documents the
+new profile and container parameter. No storage code was changed.
+
+Verification in this sandbox:
+
+- `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/unit`: 16 files, 157 tests passed.
+- `npm run build`: passed.
+- `npm run lint && npm run typecheck && npm test`: lint/typecheck passed;
+  full tests interrupted after fixture setup stalled under sandbox restrictions.
+- `npx vitest run tests/integration tests/e2e --hookTimeout 1500 --testTimeout 3000`:
+  14 failed files, 2 failed tests, 84 skipped, 15 listener errors. All browser
+  suites are unverified: security, harness, concurrency, dashboard, mcp-stdio,
+  within-leases, http-transport, network, snapshot-targeting, mcp-audit, lifecycle,
+  indicator, workflow-secrets, and e2e/maker-checker. The sandbox refuses
+  `listen` on `127.0.0.1` with `EPERM`, so fixture setup cannot complete.
+- `npm run docs:tools`: blocked by `tsx` IPC listener `EPERM`;
+  `node --import tsx scripts/gen-tool-docs.ts`: passed, regenerated 69 tools.
+- `npx prettier --write` on touched files and `git diff --check`: passed.
+
+No TGB-017 implementation deferred. Browser acceptance scenarios 1, 2 and 17
+must run in an environment permitting the fixture listener and Chrome. The
+future `form_inspect` tool remains Phase 4, so the core profile includes only
+currently implemented tools. Leases coordinate workflow runs within one harness;
+existing session naming and the developer default profile remain compatible.

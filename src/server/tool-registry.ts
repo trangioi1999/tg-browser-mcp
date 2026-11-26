@@ -62,13 +62,32 @@ export function defineTool<S extends ZodRawShape>(def: ToolDef<S>): ToolDef<S> {
 
 const PROFILE_ORDER: ToolProfile[] = ['minimal', 'developer', 'testing', 'full'];
 
+const CORE_TOOLS = new Set([
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_click',
+  'browser_fill',
+  'browser_select_option',
+  'browser_press_key',
+  'browser_wait',
+  'browser_dialog',
+  'browser_tabs',
+  'browser_errors',
+  'browser_screenshot',
+  'session_create',
+  'session_switch',
+]);
+
 /** Selects the tools advertised for a configuration (profile + explicit enable/disable lists). */
 export function selectTools(all: ToolDef[], cfg: TgConfig['tools']): ToolDef[] {
   const level = PROFILE_ORDER.indexOf(cfg.profile);
   const enabled = new Set(cfg.enabled);
   const disabled = new Set(cfg.disabled);
   return all.filter(
-    (t) => !disabled.has(t.name) && (PROFILE_ORDER.indexOf(t.profile) <= level || enabled.has(t.name)),
+    (t) =>
+      !disabled.has(t.name) &&
+      ((cfg.profile === 'core' ? CORE_TOOLS.has(t.name) : PROFILE_ORDER.indexOf(t.profile) <= level) ||
+        enabled.has(t.name)),
   );
 }
 

@@ -306,7 +306,7 @@ export class ActionExecutor {
     this.onRecorded({
       session: s.name,
       action,
-      ...(loc ? { target: loc.target, locatorExpr: loc.expr } : {}),
+      ...(loc ? { target: r?.recordingTarget ?? loc.target, locatorExpr: loc.expr } : {}),
       input,
       url,
       sensitive,
@@ -929,6 +929,7 @@ export class ActionExecutor {
         maxChars: Math.min(opts.maxChars ?? this.cfg.snapshot.maxChars, 200_000),
         ...(opts.page ? { page: opts.page } : {}),
       });
+      snap.complete = f.complete;
       let text = f.text;
       if (ps.pendingDialog)
         text += `\n\n[dialog open] ${ps.pendingDialog.type}: "${ps.pendingDialog.message}" — call browser_dialog`;

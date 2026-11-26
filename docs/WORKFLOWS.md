@@ -89,3 +89,34 @@ test_execute names=["Approve flow"]   → Markdown + JUnit reports in <dataDir>/
 Generated specs use one `browser.newContext()` per session, semantic locators, `test.step` per workflow step, and read variables/secrets from env (`BASE_URL`, `TG_SECRET_*`).
 
 Retries use resolved action inputs. Submission, typing and clicks do not retry unless explicitly marked `idempotent: true`; high-impact target names never allow that override. Run checkpoints use a synced temporary file and atomic rename. Run listing skips corrupt records and logs a warning to stderr.
+
+### Container targets and concurrent runs (TGB-017)
+
+Every element target accepts `within`, including each entry in `browser_fill.fields`,
+workflow inputs, assertion targets and extraction targets. For example:
+
+```json
+{
+  "role": "button",
+  "name": "Save",
+  "within": { "role": "form", "name": "Billing" }
+}
+```
+
+A container may use `ref`, `role` plus `name`, `label`, `testId`, or `selector`
+(CSS). It must resolve uniquely; unscoped duplicate names remain ambiguous.
+Container refs retain the normal stale-reference and identity guards. Targets
+must be descendants of their container. Use a `within` on each batch-fill field.
+
+The recorder selects a unique persistent ancestor (test ID, ID, or named semantic
+container) when an element name is duplicated. Generated Playwright tests chain
+that container locator with the element locator and retain safe string escaping.
+Snapshot refs cannot be exported as persistent Playwright locators.
+
+Workflow runs atomically lease all their session names before creating or using
+sessions. A competing run fails with `SESSION_BUSY`; runs with distinct names can
+proceed concurrently. Leases are released on completion, failure, cancellation,
+or session-creation failure. Names are scoped to the session's project; names
+and IDs of existing sessions share a lease. These leases coordinate runs within
+one harness process. Use distinct session names for independent runs; existing
+workflow session names remain unchanged for compatibility.

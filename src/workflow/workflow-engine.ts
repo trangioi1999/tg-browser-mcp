@@ -286,9 +286,10 @@ export class WorkflowEngine {
         const s = this.h.sessions.find(name);
         return s ? [{ sessionId: s.id, name: s.name, project: s.project }] : [];
       });
+    let releaseSessions: (() => void) | undefined;
     let started = !opts.startAt;
     try {
-      await this.ensureSessions(wf);
+      releaseSessions = await this.ensureSessions(wf, record.runId);
       this.h.events.emit('workflow.started', {
         runId: record.runId,
         workflow: wf.name,
@@ -402,6 +403,8 @@ export class WorkflowEngine {
         code: err.code,
         message: err.message,
       };
+    } finally {
+      releaseSessions?.();
     }
     record.finishedAt = new Date().toISOString();
     record.durationMs = Date.now() - t0;
@@ -426,17 +429,24 @@ export class WorkflowEngine {
     return record;
   }
 
-  private async ensureSessions(wf: Workflow): Promise<void> {
+  private async ensureSessions(wf: Workflow, owner: string): Promise<() => void> {
     const names = [...new Set(wf.steps.map((s) => s.session))];
-    for (const name of names) {
-      if (this.h.sessions.find(name)) continue;
-      const decl = wf.sessions[name] ?? {};
-      await this.h.sessions.create({
-        name,
-        ...(decl.persistent !== undefined ? { persistent: decl.persistent } : {}),
-        ...(decl.restore ? { restore: true } : {}),
-        ...(decl.browser ? { browser: browserShortcut(decl.browser) } : {}),
-      });
+    const release = this.h.sessions.acquireLeases(names, owner);
+    try {
+      for (const name of names) {
+        if (this.h.sessions.find(name)) continue;
+        const decl = wf.sessions[name] ?? {};
+        await this.h.sessions.create({
+          name,
+          ...(decl.persistent !== undefined ? { persistent: decl.persistent } : {}),
+          ...(decl.restore ? { restore: true } : {}),
+          ...(decl.browser ? { browser: browserShortcut(decl.browser) } : {}),
+        });
+      }
+      return release;
+    } catch (error) {
+      release();
+      throw error;
     }
   }
 
@@ -613,6 +623,7 @@ function slug(name: string): string {
 }
 
 const TARGET_KEYS = [
+  'within',
   'ref',
   'role',
   'name',

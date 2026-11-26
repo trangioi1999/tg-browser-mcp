@@ -59,3 +59,19 @@ Failure retention considers action and workflow failures; videos finalize when p
 Existing CDP contexts cannot have recording enabled retroactively. See [Dashboard](DASHBOARD.md) for storage,
 privacy and retention details. `tg-browser-mcp ui` edits the same config with validation and a `.bak` backup;
 restart MCP clients to apply changes. Proxy credential fields are environment variable **names**, never values.
+
+### Core tool profile (TGB-017)
+
+Set `tools.profile: "core"` (or `TG_BROWSER_PROFILE=core`) for a compact agent tool set:
+`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`,
+`browser_select_option`, `browser_press_key`, `browser_wait`, `browser_dialog`,
+`browser_tabs`, `browser_errors`, `browser_screenshot`, `session_create`, and
+`session_switch`. Existing profiles and the `developer` default are unchanged.
+`tools.enabled` adds tools and `tools.disabled` takes precedence. Form inspection
+is planned for Phase 4 and is not registered by this profile yet.
+
+Snapshots expose `snapshot.complete` in the SDK and `Complete: true/false` in
+formatted output. False means collection or presentation was partial: node/depth
+limits, text clipping, missing frames, scoped or interactive-only collection, or
+pagination. True describes the currently observable page, not hidden content,
+unvisited lazy tabs, or inaccessible closed shadow roots.
