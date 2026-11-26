@@ -1,3 +1,4 @@
+import { interruptedOutcome } from './action-outcome.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AsyncLock } from '../shared/async-lock.js';
 import { TgError } from '../shared/errors.js';
@@ -116,20 +117,32 @@ export function budgetTimeoutError(
       `${label} exceeded its ${ms}ms limit before any action was dispatched`,
       {
         retryable: true,
-        context: { outcome: 'NOT_STARTED', dispatch: 'not_started' },
+        context: {
+          outcome: 'NOT_STARTED',
+          dispatch: 'not_started',
+          actionOutcome: interruptedOutcome('not_started'),
+        },
       },
     );
   if (safeToRepeat)
     return new TgError('ACTION_TIMEOUT', `${label} exceeded its ${ms}ms limit`, {
       retryable: true,
-      context: { outcome: 'INDETERMINATE', dispatch: 'unknown' },
+      context: {
+        outcome: 'INDETERMINATE',
+        dispatch: 'unknown',
+        actionOutcome: interruptedOutcome('unknown'),
+      },
     });
   return new TgError(
     'ACTION_TIMEOUT',
     `${label} exceeded its ${ms}ms limit; the action was dispatched and may still complete`,
     {
       retryable: false,
-      context: { outcome: 'INDETERMINATE', dispatch: 'unknown' },
+      context: {
+        outcome: 'INDETERMINATE',
+        dispatch: 'unknown',
+        actionOutcome: interruptedOutcome('unknown'),
+      },
       suggestion:
         'Do not repeat the action blindly. Wait, then call browser_snapshot (the page reports PAGE_BUSY until the action settles) and check whether it took effect.',
     },

@@ -95,7 +95,23 @@ export function formatAction(r: ActionResult, format: 'text' | 'json'): ToolOutp
     const { image: _img, ...rest } = r;
     return json(rest);
   }
-  const lines = [`✓ ${r.message} · ${r.durationMs}ms · session=${r.session} page=${r.pageId}`];
+  const symbol = r.outcome
+    ? { VERIFIED: '✓', UNVERIFIED: '•', FAILED: '✗', INDETERMINATE: '?' }[r.outcome.verificationStatus]
+    : '✓';
+  const lines = [`${symbol} ${r.message} · ${r.durationMs}ms · session=${r.session} page=${r.pageId}`];
+  if (r.outcome)
+    lines.push(
+      `${r.outcome.verificationStatus}: ${r.outcome.failureReason ?? (r.outcome.verificationStatus === 'VERIFIED' ? 'Expectations passed' : 'No expectations supplied')}`,
+    );
+  for (const field of r.fieldResults ?? [])
+    lines.push(
+      `Field ${field.index + 1}${field.name ? ` (${field.name})` : ''}: ${field.status}${field.code ? ` [${field.code}]` : ''}${field.reason ? ` (${field.reason})` : ''}`,
+    );
+  if (r.fieldResults && r.data && typeof r.data === 'object') {
+    const report = r.data as { requiredMissing?: string[]; validationMessages?: string[] };
+    if (report.requiredMissing?.length) lines.push(`Required missing: ${report.requiredMissing.join(', ')}`);
+    if (report.validationMessages?.length) lines.push(`Validation: ${report.validationMessages.join('; ')}`);
+  }
   if (r.pageState) lines.push(r.pageState);
   for (const w of r.warnings) lines.push(`⚠ ${w}`);
   if (r.newPages?.length)
