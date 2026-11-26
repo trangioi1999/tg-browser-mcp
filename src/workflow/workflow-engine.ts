@@ -1,15 +1,15 @@
 import { budgetTimeoutError, runWithBudget, type CallScope } from '../harness/call-scope.js';
 import { classifyAction } from '../harness/action-classes.js';
 import { SECRET_REFERENCE, isSecretValuePath } from './secret-policy.js';
-import { writeFileAtomic } from './atomic-write.js';
-import { z } from 'zod';
-import fs from 'node:fs';
+import { FileWorkflowRepository } from '../storage/file-workflow-repository.js';
+import { RunStore, registerArtifact } from '../storage/store.js';
+import { FileArtifactRepository } from '../storage/file-artifact-repository.js';
 import path from 'node:path';
 import type { BrowserHarness } from '../harness/browser-harness.js';
 import type { ActionContext } from '../harness/action-executor.js';
 import { AssertionEngine, type AssertionResult } from '../testing/assertion-engine.js';
 import { TgError, toTgError, type SerializedError } from '../shared/errors.js';
-import { assertSafeName, shortId, sleep, truncate } from '../shared/util.js';
+import { shortId, sleep, truncate } from '../shared/util.js';
 import { getLogger } from '../shared/logger.js';
 import { formatConsole, formatNetwork } from '../network/network-monitor.js';
 import { browserShortcut } from '../config/load-config.js';
@@ -65,42 +65,6 @@ export interface ExecuteOptions {
   signal?: AbortSignal;
 }
 
-const StoredRunSchema = z.object({
-  runId: z.string().regex(/^[A-Za-z0-9_.-]+$/),
-  workflow: z.string(),
-  project: z.string(),
-  status: z.enum(['running', 'passed', 'failed', 'cancelled']),
-  startedAt: z.string().datetime(),
-  durationMs: z.number().optional(),
-  variables: z.record(z.string(), z.string()),
-  reports: z.array(z.string()).optional(),
-  finishedAt: z.string().datetime().optional(),
-  failure: z
-    .object({
-      stepId: z.string(),
-      code: z.string(),
-      message: z.string(),
-      url: z.string().optional(),
-      screenshot: z.string().optional(),
-      console: z.string().optional(),
-      network: z.string().optional(),
-    })
-    .optional(),
-  steps: z.array(
-    z.object({
-      id: z.string(),
-      action: z.string(),
-      session: z.string(),
-      status: z.enum(['passed', 'failed', 'skipped', 'pending', 'running', 'cancelled']),
-      attempts: z.number(),
-      durationMs: z.number(),
-      message: z.string(),
-      name: z.string().optional(),
-      error: z.object({ code: z.string(), message: z.string() }).optional(),
-    }),
-  ),
-});
-
 const VAR_RE = /\$\{([A-Za-z_][A-Za-z0-9_.]*)\}/g;
 
 /**
@@ -130,51 +94,24 @@ export class WorkflowEngine {
 
   // ───────────── Storage ─────────────
 
+  private get definitions() {
+    return new FileWorkflowRepository(this.h.config.dataDir, this.h.config.project);
+  }
+  private get records() {
+    return new RunStore(this.h.config.dataDir, this.h.config.project);
+  }
   saveDefinition(wf: Workflow): string {
-    fs.mkdirSync(this.workflowsDir, { recursive: true, mode: 0o700 });
-    const file = path.join(this.workflowsDir, `${assertSafeName('workflow', slug(wf.name))}.json`);
-    fs.writeFileSync(file, `${JSON.stringify(wf, null, 2)}\n`, { mode: 0o600 });
-    return file;
+    return this.definitions.save(wf);
   }
-
   loadDefinition(name: string): Workflow {
-    const file = path.join(this.workflowsDir, `${assertSafeName('workflow', slug(name))}.json`);
-    if (!fs.existsSync(file))
-      throw new TgError('WORKFLOW_NOT_FOUND', `Workflow "${name}" not found`, {
-        suggestion: 'Call workflow_list.',
-      });
-    const wf = assertValidWorkflow(JSON.parse(fs.readFileSync(file, 'utf8')));
-    return wf;
+    return this.definitions.load(name);
   }
-
-  listDefinitions(): Array<{ name: string; steps: number; sessions: string[]; file: string }> {
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(this.workflowsDir).filter((f) => f.endsWith('.json'));
-    } catch {
-      return [];
-    }
-    return files.flatMap((f) => {
-      try {
-        const wf = JSON.parse(fs.readFileSync(path.join(this.workflowsDir, f), 'utf8')) as Workflow;
-        return [
-          {
-            name: wf.name,
-            steps: wf.steps.length,
-            sessions: [...new Set(wf.steps.map((s) => s.session ?? 'default'))],
-            file: path.join(this.workflowsDir, f),
-          },
-        ];
-      } catch {
-        return [];
-      }
-    });
+  listDefinitions() {
+    return this.definitions.list();
   }
-
   private checkpoint(r: RunRecord): void {
     try {
-      fs.mkdirSync(this.runsDir, { recursive: true, mode: 0o700 });
-      writeFileAtomic(path.join(this.runsDir, `${r.runId}.json`), JSON.stringify(r, null, 2));
+      this.records.save(r);
     } catch (e) {
       getLogger().warn({ err: (e as Error).message }, 'failed to write workflow checkpoint');
     }
@@ -186,44 +123,21 @@ export class WorkflowEngine {
       const run = this.getRun(runId);
       run.reports = [...new Set([...(run.reports ?? []), ...paths])];
       this.checkpoint(run);
+      for (const file of paths) {
+        try {
+          registerArtifact(this.h.config.dataDir, this.h.config.project, file, runId, 'report');
+        } catch (e) {
+          getLogger().warn({ err: (e as Error).message }, 'failed to index report artifact');
+        }
+      }
     }
   }
 
   getRun(runId: string): RunRecord {
-    const live = this.runs.get(runId);
-    if (live) return live.record;
-    const f = path.join(this.runsDir, `${assertSafeName('run', runId)}.json`);
-    if (!fs.existsSync(f)) throw new TgError('WORKFLOW_NOT_FOUND', `Run ${runId} not found`);
-    return JSON.parse(fs.readFileSync(f, 'utf8')) as RunRecord;
+    return this.runs.get(runId)?.record ?? this.records.get(runId);
   }
-
-  listRuns(limit = 20): Array<Pick<RunRecord, 'runId' | 'workflow' | 'status' | 'startedAt' | 'durationMs'>> {
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(this.runsDir).filter((f) => f.endsWith('.json'));
-    } catch {
-      return [];
-    }
-    return files
-      .flatMap((f) => {
-        try {
-          const run = StoredRunSchema.parse(JSON.parse(fs.readFileSync(path.join(this.runsDir, f), 'utf8')));
-          if (f !== `${run.runId}.json`) throw new Error('Run id does not match filename');
-          return [run];
-        } catch {
-          getLogger().warn({ file: f }, 'skipping unreadable workflow run');
-          return [];
-        }
-      })
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-      .slice(0, limit)
-      .map(({ runId, workflow, status, startedAt, durationMs }) => ({
-        runId,
-        workflow,
-        status,
-        startedAt,
-        ...(durationMs !== undefined ? { durationMs } : {}),
-      }));
+  listRuns(limit = 20) {
+    return this.records.list(limit);
   }
 
   cancel(runId: string): boolean {
@@ -584,10 +498,12 @@ export class WorkflowEngine {
       const s = this.h.sessions.get(step.session);
       const ps = s.page();
       f.url = this.h.redactor.url(ps.page.url());
-      const dir = path.join(this.h.config.dataDir, 'artifacts', 'runs', runId);
-      fs.mkdirSync(dir, { recursive: true });
-      const file = path.join(dir, `failure-${step.id}.png`);
+      const file = new FileArtifactRepository(this.h.config.dataDir, this.h.config.project).allocate(
+        runId,
+        `failure-${step.id}.png`,
+      );
       await ps.page.screenshot({ path: file, timeout: 5000 });
+      registerArtifact(this.h.config.dataDir, this.h.config.project, file, runId, 'screenshot');
       f.screenshot = file;
       const errs = s.monitor.errors(ps.id);
       if (errs.console.length) f.console = formatConsole(errs.console.slice(-5));
@@ -597,19 +513,6 @@ export class WorkflowEngine {
     }
     return f;
   }
-}
-
-function slug(name: string): string {
-  return (
-    name
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // strip accents: "Đăng nhập" -> "dang-nhap", not "ng-nh-p"
-      .replace(/[đĐ]/g, 'd')
-      .toLowerCase()
-      .replace(/[^a-z0-9._-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 64) || 'workflow'
-  );
 }
 
 const TARGET_KEYS = [

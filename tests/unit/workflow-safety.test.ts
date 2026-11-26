@@ -182,6 +182,7 @@ describe('workflow safety', () => {
       name: 'ok',
       steps: [{ ...fill, input: { label: 'Field', value: 'x' } }],
     });
+    fs.mkdirSync(engine.runsDir, { recursive: true });
     for (const [file, data] of [
       ['torn', '{'],
       ['null', 'null'],

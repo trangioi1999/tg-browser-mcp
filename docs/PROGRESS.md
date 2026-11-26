@@ -78,3 +78,14 @@ See docs/SECURITY.md (limitations) and docs/SESSIONS.md (storage). Only Chrome w
 1. Push to a Git remote and let CI run the Windows/Linux/Node 20–24 matrix.
 2. Connect from Claude Code/Codex with `.mcp.json` and try the maker-checker prompt on the fixture app.
 3. Publish to npm; then build the TG Studio event consumer.
+
+## V2 Phase 1 — lane B
+
+- TGB-014 implemented: storage repository interfaces and atomic file implementations; workflow collision/stale-write checks; no filesystem access in the workflow engine; project-scoped failure artifacts; dashboard reads through repositories without per-request harness creation.
+- TGB-015 implemented: version 0.2.0 / Node >=22.13, CI excludes Node 20 and includes the minimum version, doctor version check; SQLite adapter with checksummed schema migrations, WAL, busy timeout and bounded WAL initialization retry, 0600 database, redacted run records and artifact metadata. New stores default to SQLite; legacy installations retain the documented pre-finalize file fallback. Workflow definitions remain files.
+- Migration CLI supports dry run, backups (including consistent SQLite snapshots), project-transactional/idempotent imports, conflict and invalid-file reporting, and finalization. Rollback is documented in CONFIGURATION.md and tested.
+- Artifact indexing covers workflow failures/reports and screenshot/trace/video events. Minimal files outside the lane: four additive lines in src/harness/browser-harness.ts attach/detach the storage observer; src/version.ts and package-lock.json synchronize version/runtime metadata. No changes to ensureSessions or action execution.
+- Final verification: `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check` passed. `npx vitest run tests/unit`: 17 files / 161 tests passed, including 15 dashboard tests. `npx vitest run tests/unit/sqlite-storage.test.ts -t 'two independent processes'`: five consecutive runs, each 1 passed / 8 filtered out, each preserving all 100 writes.
+- Full `npm test` was attempted twice and interrupted after repeated 60-second fixture setup timeouts. Diagnostic `npm test -- --hookTimeout=1000 --testTimeout=2000` completed: 13 failed / 17 passed files; 2 failed / 159 passed / 80 skipped tests; 14 unhandled errors. It preceded the last two unit tests. Sandbox denies listening on 127.0.0.1 (EPERM), so browser behavior could not be verified.
+- Blocked suites: integration/{security,harness,dashboard,concurrency,mcp-stdio,http-transport,network,snapshot-targeting,mcp-audit,lifecycle,indicator,workflow-secrets}.test.ts and e2e/maker-checker.test.ts.
+- Implementation complete; browser verification and requested logical commits remain blocked by environment permissions. Git cannot create the worktree index.lock (Operation not permitted). Nothing pushed and no PR opened.

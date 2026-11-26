@@ -9,8 +9,8 @@ import { loadConfig, parseConfig, readConfigFile, type CliOverrides } from '../c
 import { assertSafeName, isPathInside } from '../shared/util.js';
 import { DataRedactor } from '../security/data-redactor.js';
 import { SessionStore } from '../session/session-store.js';
-import { BrowserHarness } from '../harness/browser-harness.js';
-import { WorkflowEngine } from '../workflow/workflow-engine.js';
+import { RunStore, runProjects } from '../storage/store.js';
+import { FileWorkflowRepository } from '../storage/file-workflow-repository.js';
 import { ProxyManager } from '../network/proxy-manager.js';
 import { CertificateManager } from '../network/certificate-manager.js';
 import { detectBrowsers } from '../browser/browser-detector.js';
@@ -185,8 +185,9 @@ export async function startDashboard(
   };
   const projects = () =>
     [
-      ...new Set(
-        ['journal', 'runs', 'artifacts', 'sessions', 'workflows'].flatMap((r) =>
+      ...new Set([
+        ...runProjects(dataDir),
+        ...['journal', 'runs', 'artifacts', 'sessions', 'workflows'].flatMap((r) =>
           names(path.join(dataDir, r)).filter((n) => {
             try {
               return fs.statSync(safeFile(dataDir, `${r}/${n}`, [r])).isDirectory();
@@ -195,7 +196,7 @@ export async function startDashboard(
             }
           }),
         ),
-      ),
+      ]),
     ].sort();
   const events = (project: string, name: string): JournalEvent[] =>
     ['events.1.jsonl', 'events.jsonl'].flatMap((f) => {
@@ -323,11 +324,11 @@ export async function startDashboard(
   };
   const runs = (project: string, runId?: string) => {
     // The UI only uses the engine's read methods; no browser is started.
-    const h = new BrowserHarness({ ...config, project, journal: { ...config.journal, enabled: false } });
-    const engine = new WorkflowEngine(h);
+    const records = new RunStore(dataDir, project);
     if (runId) {
-      safeFile(dataDir, `runs/${project}/${runId}.json`, ['runs']);
-      const run = engine.getRun(runId);
+      if (fs.existsSync(path.join(dataDir, 'runs', project, runId + '.json')))
+        safeFile(dataDir, `runs/${project}/${runId}.json`, ['runs']);
+      const run = records.get(runId);
       return {
         ...run,
         failure: run.failure
@@ -352,13 +353,13 @@ export async function startDashboard(
     try {
       safeFile(dataDir, `runs/${project}`, ['runs']);
     } catch {
-      return [];
+      return records.list(100).map((r) => ({ ...r, project }));
     }
     // Check every checkpoint before the engine reads the directory; it must not follow links.
     for (const name of fs.readdirSync(path.join(dataDir, 'runs', project))) {
       if (name.endsWith('.json')) safeFile(dataDir, `runs/${project}/${name}`, ['runs']);
     }
-    return engine.listRuns(100).map((r) => ({ ...r, project }));
+    return records.list(100).map((r) => ({ ...r, project }));
   };
   /** Saved workflow definitions. Step inputs are summarised to their target only: never values. */
   const workflows = (project: string, name?: string) => {
@@ -370,8 +371,7 @@ export async function startDashboard(
     }
     for (const f of fs.readdirSync(path.join(dataDir, 'workflows', project)))
       if (f.endsWith('.json')) safeFile(dataDir, `workflows/${project}/${f}`, ['workflows']);
-    const h = new BrowserHarness({ ...config, project, journal: { ...config.journal, enabled: false } });
-    const engine = new WorkflowEngine(h);
+    const definitions = new FileWorkflowRepository(dataDir, project);
     const allRuns = (() => {
       try {
         return runs(project) as Array<{ workflow: string; status: string; startedAt: string }>;
@@ -381,7 +381,7 @@ export async function startDashboard(
     })();
     const history = (wf: string) => allRuns.filter((r) => r.workflow === wf);
     if (!name)
-      return engine.listDefinitions().map((d) => {
+      return definitions.list().map((d) => {
         const rs = history(d.name);
         return {
           project,
@@ -393,9 +393,9 @@ export async function startDashboard(
           lastRun: rs[0] ? { status: rs[0].status, startedAt: rs[0].startedAt } : null,
         };
       });
-    const def = engine.listDefinitions().find((d) => path.basename(d.file, '.json') === name);
+    const def = definitions.list().find((d) => path.basename(d.file, '.json') === name);
     if (!def) throw new HttpError(404, 'Không tìm thấy workflow');
-    const wf = engine.loadDefinition(def.name);
+    const wf = definitions.load(def.name);
     const target = (input: Record<string, unknown> | undefined, action: unknown): string => {
       if (!input) return '';
       // For typing actions `text` is what gets typed, not a locator: never show it.

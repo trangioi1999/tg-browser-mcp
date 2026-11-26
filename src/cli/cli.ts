@@ -18,6 +18,7 @@ Usage:
   tg-browser-mcp browsers              List detected browsers
   tg-browser-mcp sessions              List saved sessions for the project
   tg-browser-mcp ui [--port 8940] [--config <file>] [--project <p>] [--open]
+  tg-browser-mcp migrate [--dry-run | --backup | --finalize]  Import legacy runs
   tg-browser-mcp workflows             List saved workflows and recent runs
 
 Options (start):
@@ -58,6 +59,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       'log-level': { type: 'string' },
       url: { type: 'string' },
       force: { type: 'boolean' },
+      'dry-run': { type: 'boolean' },
+      backup: { type: 'boolean' },
+      finalize: { type: 'boolean' },
       open: { type: 'boolean' },
       'no-launch': { type: 'boolean' },
       version: { type: 'boolean', short: 'v' },
@@ -116,6 +120,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   if (values.port) config.http.port = Number(values.port);
 
   switch (cmd) {
+    case 'migrate': {
+      const { migrate } = await import('../storage/migrate.js');
+      const result = migrate(config.dataDir, {
+        dryRun: values['dry-run'],
+        backup: values.backup,
+        finalize: values.finalize,
+      });
+      console.error(JSON.stringify(result, null, 2));
+      return result.conflicts.length || result.unreadable.length ? 1 : 0;
+    }
     case 'ui': {
       const { startDashboard } = await import('../ui/server.js');
       const dashboard = await startDashboard(config, {
