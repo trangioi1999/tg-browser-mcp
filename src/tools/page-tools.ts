@@ -1,3 +1,4 @@
+import { ExpectSpecSchema, type ExpectSpec } from '../harness/action-outcome.js';
 import { z } from 'zod';
 import {
   defineTool,
@@ -12,11 +13,13 @@ import { TargetShape, type Target } from '../harness/target.js';
 import type { ActionContext } from '../harness/action-executor.js';
 
 function ctxOf(a: {
+  expect?: unknown[] | undefined;
   session?: string | undefined;
   pageId?: string | undefined;
   snapshot?: 'diff' | 'full' | 'none' | undefined;
 }): ActionContext {
   return {
+    ...(a.expect ? { expect: a.expect.map((e) => ExpectSpecSchema.parse(e)) as ExpectSpec[] } : {}),
     ...(a.session ? { session: a.session } : {}),
     ...(a.pageId ? { pageId: a.pageId } : {}),
     ...(a.snapshot ? { snapshot: a.snapshot } : {}),
@@ -33,7 +36,13 @@ function targetOf(a: Partial<Record<keyof typeof TargetShape, unknown>>): Target
 const fmt = (c: ToolContext) => (c.config.output.verbose ? 'json' : 'text') as 'text' | 'json';
 
 const T = TargetShape;
-const ACT = { ...PageAddress, ...SnapshotModeParam };
+// Compact advertised shape; the shared contract validates every item at runtime.
+const ExpectParam = z
+  .array(z.unknown())
+  .refine((v) => v.every((e) => ExpectSpecSchema.safeParse(e).success), 'Invalid ExpectSpec')
+  .describe('ExpectSpec postconditions')
+  .optional();
+const ACT = { ...PageAddress, ...SnapshotModeParam, expect: ExpectParam };
 
 export const navigationTools = [
   defineTool({
@@ -175,8 +184,21 @@ export const interactionTools = [
       ...T,
       value: z.string().optional(),
       submit: z.boolean().optional().describe('Press Enter after filling'),
+      options: z
+        .object({
+          continueOnError: z.boolean().optional(),
+          verify: z.boolean().optional(),
+          within: z.object(T).optional(),
+        })
+        .optional(),
       fields: z
-        .array(z.object({ ...T, value: z.union([z.string(), z.boolean()]) }))
+        .array(
+          z.object({
+            ...T,
+            value: z.union([z.string(), z.boolean(), z.array(z.string())]),
+            mode: z.enum(['replace', 'ifEmpty']).optional(),
+          }),
+        )
         .max(50)
         .optional(),
       ...ACT,
@@ -185,8 +207,21 @@ export const interactionTools = [
       if (a.fields?.length)
         return formatAction(
           await c.harness.actions.fillForm(
-            a.fields.map((f) => ({ target: targetOf(f), value: f.value })),
+            a.fields.map((f) => ({
+              target: targetOf(f),
+              value: f.value,
+              ...(f.mode ? { mode: f.mode } : {}),
+            })),
             ctxOf(a),
+            a.options
+              ? {
+                  ...(a.options.continueOnError !== undefined
+                    ? { continueOnError: a.options.continueOnError }
+                    : {}),
+                  ...(a.options.verify !== undefined ? { verify: a.options.verify } : {}),
+                  ...(a.options.within ? { within: targetOf(a.options.within) } : {}),
+                }
+              : {},
           ),
           fmt(c),
         );

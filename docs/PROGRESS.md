@@ -78,3 +78,34 @@ See docs/SECURITY.md (limitations) and docs/SESSIONS.md (storage). Only Chrome w
 1. Push to a Git remote and let CI run the Windows/Linux/Node 20–24 matrix.
 2. Connect from Claude Code/Codex with `.mcp.json` and try the maker-checker prompt on the fixture app.
 3. Publish to npm; then build the TG Studio event consumer.
+
+## V2 Phase 1 — lane A
+
+### TGB-012
+
+- Extracted the action envelope (policy probes/gate, lock, budget handling, settle, snapshot/diff and events) into `ActionPipeline`; inspection and screenshot/trace operations into `Inspectors` and `ArtifactService`. `ActionExecutor` retains its public methods through delegation.
+- Added 10 fake-page pipeline tests. Optional native V8 probe (`TGB_PIPELINE_COVERAGE=/tmp/lane-a-coverage-final.json npx vitest run tests/unit/action-pipeline.test.ts`) maps execution ranges back to source lines and enforces the 90% threshold. Final measurement: 302/309 mapped lines covered (97.73%); not a branch-coverage claim.
+- Verification: lint/typecheck passed; `npx vitest run tests/unit`: 16 files, 159 tests passed. `npm test` attempted but stalled on fixture setup and was interrupted: localhost bind is denied (`listen EPERM 127.0.0.1`); Playwright Chromium headless shell revision 1255 is also missing. All integration and e2e suites remain unverified in this environment.
+
+### TGB-013
+
+- Added ActionOutcome/ExpectSpec, scoped verification through AssertionEngine and NetworkMonitor, temporary response observers with in-memory JSON checks, redacted verdict evidence, status prefixes, SDK and tool `expect` support. Timeout errors retain legacy context and additionally carry `actionOutcome`.
+- Tool schemas advertise a compact array and validate every item against the shared ExpectSpec schema at runtime. Measured baseline → expect: minimal 7,747 → 8,221 (+474), developer 26,742 → 28,085 (+1,343), testing 36,773 → 38,116 (+1,343), full 40,545 → 41,967 (+1,422) chars.
+- Unit tests: 17 files / 167 tests passed before final timeout additions. Added fixture integration cases for 500, rejected JSON on 200, verified UI text, and slow pending requests. Browser execution remains blocked by localhost bind denial and missing Chromium. Existing Phase 0 concurrency tests exercise timeout/busy and non-idempotent retries; workflow V2 expectation syntax remains Phase 4 / outside this lane.
+- `npm run docs:tools` failed on tsx IPC bind (EPERM); equivalent `node --import tsx scripts/gen-tool-docs.ts` succeeded (69 tools). Schema measurement used `node --import tsx scripts/schema-size.ts` for the same reason.
+- Commit attempt for TGB-012 was denied creating the worktree Git `index.lock`; no commits can be created under current sandbox permissions.
+
+### TGB-016
+
+- Batch fills now report every field (including not-attempted fields after a failure), precheck disabled/read-only controls, preserve existing values with `ifEmpty`, select editable autocomplete options and radio groups, support arrays for select controls, and compare read-back values without returning sensitive values. Existing combobox ambiguity rejection is reused. Default read-back verification feeds ActionOutcome; `verify:false` remains UNVERIFIED without explicit expectations.
+- Added `continueOnError`, form `within`, required-missing and associated validation-message reporting. Policy refusals remain thrown failures with partial progress attached. Scoped refs must reconstruct a unique matching container; ambiguous scopes fail safely.
+- Added unit tests and fixture integration tests for disabled/readonly partial completion, preservation, autocomplete, radio, dependent fields, ambiguity, missing fields, sensitive read-back, validation, opt-out and duplicate names in scoped forms. No Angular/PrimeNG-specific adapters were added; these tests exercise the generic ARIA path.
+- TGB-016 adds 716 schema characters per profile independently of `expect`. Final totals: minimal 8,937; developer 28,801; testing 38,832; full 42,683. The expect-only regression tests remain within 1,500 characters for all profiles.
+
+### Final verification and environment limits
+
+- `npm run lint`, `npm run typecheck`, and `npm run build`: passed. `npx vitest run tests/unit`: 19 files / 190 tests passed on the final pass. Native V8 pipeline probe: 10 tests passed, 97.73% mapped-line coverage.
+- `npm test`: attempted and interrupted because fixture startup cannot bind localhost (`EPERM`). Unverified suites: `tests/integration/{action-outcome,smart-form,concurrency,dashboard,harness,http-transport,indicator,lifecycle,mcp-audit,mcp-stdio,network,security,snapshot-targeting,workflow-secrets}.test.ts` and `tests/e2e/maker-checker.test.ts`. No browser-suite pass is claimed. Direct Chrome launch also exited with SIGABRT/EPERM; bundled Chromium revision 1255 is absent.
+- `npm run docs:tools` and `npm run schema-size`: tsx IPC bind denied. Equivalent `node --import tsx scripts/gen-tool-docs.ts` generated 69 tools; `node --import tsx scripts/schema-size.ts` produced the totals above. Prettier was run on every changed file, and generated docs were regenerated afterward to retain generator formatting.
+- Outside the lane's source-file list: one additive paragraph in `src/server/mcp-server.ts` documents the shared ExpectSpec shape so compact per-tool schemas remain usable. Also updated the shared fixture app, generated `docs/TOOLS.md`, and only this lane's section in `docs/PROGRESS.md`. The tool-registry formatter additionally displays outcomes and per-field results, as required by the designs.
+- Commit creation is blocked: Git cannot create `/Users/trangioi/Documents/vibe-code/tg-browser-mcp/.git/worktrees/tg-browser-mcp-p1-a/index.lock` (`Operation not permitted`). All changes remain in this worktree; nothing pushed and no PR opened. No other worktree or branch was modified.

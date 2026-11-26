@@ -151,6 +151,7 @@ Category: interaction · Profile: minimal · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_fill
 
@@ -172,10 +173,12 @@ Category: interaction · Profile: minimal · Risk: interact
 | `nth` | integer |  |  |
 | `value` | string |  |  |
 | `submit` | boolean |  | Press Enter after filling |
+| `options` | object |  |  |
 | `fields` | array |  |  |
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_press_key
 
@@ -199,6 +202,7 @@ Category: interaction · Profile: minimal · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_dialog
 
@@ -213,6 +217,7 @@ Category: interaction · Profile: minimal · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_navigate
 
@@ -227,6 +232,7 @@ Category: navigation · Profile: minimal · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_wait
 
@@ -255,6 +261,7 @@ Category: navigation · Profile: minimal · Risk: read
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_close
 
@@ -481,6 +488,7 @@ Category: interaction · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_type
 
@@ -506,6 +514,7 @@ Category: interaction · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_hover
 
@@ -528,6 +537,7 @@ Category: interaction · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_select_option
 
@@ -551,6 +561,7 @@ Category: interaction · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_check
 
@@ -573,6 +584,7 @@ Category: interaction · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_uncheck
 
@@ -595,6 +607,7 @@ Category: interaction · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_drag
 
@@ -609,6 +622,7 @@ Category: interaction · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_scroll
 
@@ -634,6 +648,7 @@ Category: interaction · Profile: developer · Risk: read
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_back
 
@@ -646,6 +661,7 @@ Category: navigation · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_forward
 
@@ -658,6 +674,7 @@ Category: navigation · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### browser_reload
 
@@ -670,6 +687,7 @@ Category: navigation · Profile: developer · Risk: interact
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### network_diagnose
 
@@ -1054,6 +1072,7 @@ Category: interaction · Profile: full · Risk: high
 | `session` | string |  |  |
 | `pageId` | string |  |  |
 | `snapshot` | `diff` \| `full` \| `none` |  | Page state returned after the action: diff (default), full, none |
+| `expect` | array |  | ExpectSpec postconditions |
 
 ### network_proxy_status
 
