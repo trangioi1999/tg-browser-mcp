@@ -38,12 +38,18 @@ export function redactComparison(res: { passed: boolean; actual: string; expecte
 export class AssertionEngine {
   constructor(
     private readonly sessions: SessionManager,
-    private readonly actions: ActionExecutor,
+    private readonly actions: Pick<ActionExecutor, 'getText' | 'isSensitiveField'>,
   ) {}
 
   async check(
     a: Assertion,
-    ctx: { session?: string; pageId?: string } = {},
+    ctx: {
+      session?: string;
+      project?: string;
+      pageId?: string;
+      lockedPage?: import('../session/session.js').PageState;
+      sinceSeq?: number;
+    } = {},
     signal?: AbortSignal,
   ): Promise<AssertionResult> {
     const t0 = Date.now();
@@ -103,10 +109,18 @@ export class AssertionEngine {
 
   private async evaluateOnce(
     a: Assertion,
-    ctx: { session?: string; pageId?: string },
+    ctx: {
+      session?: string;
+      project?: string;
+      pageId?: string;
+      lockedPage?: import('../session/session.js').PageState;
+      sinceSeq?: number;
+    },
   ): Promise<{ passed: boolean; actual?: string; expected?: string }> {
-    const session = ctx.session ? this.sessions.get(ctx.session) : await this.sessions.ensureActive();
-    const ps = session.page(ctx.pageId);
+    const session = ctx.session
+      ? this.sessions.get(ctx.session, ctx.project)
+      : await this.sessions.ensureActive();
+    const ps = ctx.lockedPage ?? session.page(ctx.pageId);
     const target = a.target as Target | undefined;
     const needTarget =
       ['visible', 'hidden', 'value', 'count', 'attribute', 'enabled', 'disabled', 'checked'].includes(
@@ -122,7 +136,7 @@ export class AssertionEngine {
       case 'title':
         return this.compare(a, await ps.page.title());
       case 'no_console_errors': {
-        const errs = session.monitor.errors(ps.id).console;
+        const errs = session.monitor.errors(ps.id, ctx.sinceSeq).console;
         return {
           passed: errs.length === 0,
           actual: errs.map((e) => e.text).join(' | ') || 'none',
@@ -130,7 +144,7 @@ export class AssertionEngine {
         };
       }
       case 'no_failed_requests': {
-        const errs = session.monitor.errors(ps.id).network;
+        const errs = session.monitor.errors(ps.id, ctx.sinceSeq).network;
         return {
           passed: errs.length === 0,
           actual: errs.map((e) => `${e.method} ${e.url} ${e.status ?? e.failure}`).join(' | ') || 'none',
@@ -138,6 +152,11 @@ export class AssertionEngine {
         };
       }
       case 'text': {
+        if (ctx.lockedPage) {
+          const r = target && hasTarget(target) ? await resolveTarget(ps, target, 1000, 'read') : undefined;
+          const el = r ? (r.kind === 'handle' ? r.handle : r.locator) : ps.frame().locator('body');
+          return this.compare(a, await el.innerText());
+        }
         const text = await this.actions.getText(
           target && hasTarget(target) ? target : undefined,
           { maxChars: 20_000 },

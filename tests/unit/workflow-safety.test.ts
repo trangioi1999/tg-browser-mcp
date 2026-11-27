@@ -16,7 +16,12 @@ function setup(allowInlineSecrets = false) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-safety-'));
   dirs.push(dataDir);
   const h = new BrowserHarness({ dataDir, logLevel: 'silent', workflows: { allowInlineSecrets } });
-  vi.spyOn(h.sessions, 'find').mockReturnValue({ id: 's', name: 'default', project: 'default' } as never);
+  vi.spyOn(h.sessions, 'find').mockReturnValue({
+    id: 's',
+    name: 'default',
+    project: 'default',
+    pages: new Map(),
+  } as never);
   return { h, engine: new WorkflowEngine(h) };
 }
 afterEach(() => {
@@ -182,6 +187,7 @@ describe('workflow safety', () => {
       name: 'ok',
       steps: [{ ...fill, input: { label: 'Field', value: 'x' } }],
     });
+    fs.mkdirSync(engine.runsDir, { recursive: true });
     for (const [file, data] of [
       ['torn', '{'],
       ['null', 'null'],

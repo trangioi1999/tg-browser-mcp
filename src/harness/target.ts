@@ -9,7 +9,22 @@ import { TgError, toTgError } from '../shared/errors.js';
  * How a tool addresses an element. Prefer `ref` from a snapshot; semantic locators follow
  * Playwright best practice priority: role > label > testId > placeholder > text > CSS selector.
  */
+export const ContainerSchema = z
+  .object({
+    ref: z.string().optional(),
+    role: z.string().optional(),
+    name: z.string().optional(),
+    exact: z.boolean().optional(),
+    label: z.string().optional(),
+    testId: z.string().optional(),
+    selector: z.string().optional(),
+  })
+  .refine((t) => !!(t.ref || t.role || t.label || t.testId || t.selector), 'Provide a container target');
+
 export const TargetShape = {
+  within: ContainerSchema.optional().describe(
+    'Scope to a unique container (ref, role+name, label, testId or CSS selector)',
+  ),
   ref: z.string().optional().describe('Element ref from snapshot (preferred)'),
   role: z.string().optional(),
   name: z.string().optional(),
@@ -40,13 +55,14 @@ export function describeTarget(t: Partial<Target>): string {
   return '(none)';
 }
 
-export type Resolved =
+export type Resolved = (
   | { kind: 'handle'; handle: ElementHandle<Element>; desc: ElementDescription; frame: Frame; ref: string }
-  | { kind: 'locator'; locator: Locator; desc: ElementDescription; frame: Frame; ref?: string };
+  | { kind: 'locator'; locator: Locator; desc: ElementDescription; frame: Frame; ref?: string }
+) & { recordingTarget?: Target };
 
 type AriaRole = Parameters<Frame['getByRole']>[0];
 
-function buildLocator(frame: Frame, t: Target): Locator {
+function buildLocator(frame: Frame | Locator, t: Target): Locator {
   let loc: Locator;
   if (t.role) {
     loc = frame.getByRole(
@@ -81,10 +97,43 @@ export async function resolveTarget(
 ): Promise<Resolved> {
   if (t.ref) {
     const { handle, entry, desc } = await ps.refs.resolve(t.ref, intent);
-    return { kind: 'handle', handle, desc, frame: entry.frame, ref: t.ref };
+    if (t.within) {
+      const container = await resolveTarget(ps, t.within, timeout, intent);
+      if (container.frame !== entry.frame)
+        throw new TgError('ELEMENT_NOT_FOUND', 'Target is outside its container frame');
+      const root = container.kind === 'handle' ? container.handle : await container.locator.elementHandle();
+      if (
+        !root ||
+        !(await handle.evaluate((el, parent) => {
+          for (
+            let node: Node | null = el.parentNode;
+            node;
+            node = node instanceof ShadowRoot ? node.host : node.parentNode
+          ) {
+            if (node === parent) return true;
+          }
+          return false;
+        }, root))
+      )
+        throw new TgError('ELEMENT_NOT_FOUND', 'Target is outside its container');
+    }
+    return {
+      kind: 'handle',
+      handle,
+      desc,
+      frame: entry.frame,
+      ref: t.ref,
+      recordingTarget: await scopedRecordingTarget(entry.frame, handle, desc),
+    };
   }
-  const frame = ps.frame();
-  let loc = buildLocator(frame, t);
+  let frame = ps.frame();
+  let root: Frame | Locator = frame;
+  if (t.within) {
+    const container = await resolveTarget(ps, t.within, timeout, intent);
+    frame = container.frame;
+    root = container.kind === 'locator' ? container.locator : await handleLocator(frame, container.handle);
+  }
+  let loc = buildLocator(root, t);
   if (t.nth !== undefined) loc = loc.nth(t.nth);
   try {
     await loc.first().waitFor({ state: 'attached', timeout });
@@ -122,7 +171,13 @@ export async function resolveTarget(
     snapshotAccessKey,
   );
   const desc = await crossCheckDescription(loc, JSON.parse(raw) as ElementDescription, frame);
-  return { kind: 'locator', locator: loc, desc, frame };
+  return {
+    kind: 'locator',
+    locator: loc,
+    desc,
+    frame,
+    recordingTarget: await scopedRecordingTarget(frame, loc, desc),
+  };
 }
 
 /** Builds the most robust Playwright locator expression for an element (used by test generation). */
@@ -143,4 +198,71 @@ export function suggestLocator(desc: ElementDescription): { expr: string; target
     return { expr: `getByText(${q(desc.name)}, { exact: true })`, target: { text: desc.name, exact: true } };
   if (desc.id) return { expr: `locator(${q(`#${desc.id}`)})`, target: { selector: `#${desc.id}` } };
   return { expr: `locator(${q(desc.tag || '*')})`, target: { selector: desc.tag || '*' } };
+}
+
+async function handleLocator(frame: Frame, handle: ElementHandle<Element>): Promise<Locator> {
+  const selector = await handle.evaluate((el) => {
+    const parts: string[] = [];
+    let current: Element | null = el;
+    while (current) {
+      const parent: Element | null = current.parentElement;
+      const root = current.getRootNode();
+      const siblings =
+        parent?.children ?? (root instanceof ShadowRoot ? root.children : current.ownerDocument.children);
+      const index = Array.from(siblings).indexOf(current) + 1;
+      parts.unshift(`${current.tagName.toLowerCase()}:nth-child(${index})`);
+      if (parent) {
+        parts.unshift(' > ');
+        current = parent;
+      } else if (root instanceof ShadowRoot) {
+        parts.unshift(' ');
+        current = root.host;
+      } else current = null;
+    }
+    return parts.join('');
+  });
+  const locator = frame.locator(selector);
+  if (!(await locator.evaluate((el, original) => el === original, handle)))
+    throw new TgError('TARGET_CHANGED', 'Container changed during resolution');
+  return locator;
+}
+
+/** Choose a unique persistent ancestor before dispatch, while the target still exists. */
+async function scopedRecordingTarget(
+  frame: Frame,
+  element: Locator | ElementHandle<Element>,
+  desc: ElementDescription,
+): Promise<Target> {
+  const target = suggestLocator(desc).target;
+  if ((await buildLocator(frame, target).count()) <= 1) return target;
+  const handle: ElementHandle<Element> | null =
+    'elementHandle' in element ? await element.elementHandle() : element;
+  if (!handle) return target;
+  const candidates = await handle.evaluate((el) => {
+    const result: Array<{ testId?: string; selector?: string; role?: string; name?: string }> = [];
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (p.getAttribute('data-testid')) result.push({ testId: p.getAttribute('data-testid')! });
+      if (p.id) result.push({ selector: `#${CSS.escape(p.id)}` });
+      const role =
+        p.getAttribute('role') ||
+        (
+          {
+            FORM: 'form',
+            SECTION: 'region',
+            ARTICLE: 'article',
+            FIELDSET: 'group',
+            DIALOG: 'dialog',
+          } as Record<string, string>
+        )[p.tagName];
+      if (role && p.getAttribute('aria-label')) result.push({ role, name: p.getAttribute('aria-label')! });
+    }
+    return result;
+  });
+  if ('elementHandle' in element) await handle.dispose();
+  for (const within of candidates) {
+    const root = buildLocator(frame, within);
+    if ((await root.count()) === 1 && (await buildLocator(root, target).count()) === 1)
+      return { ...target, within };
+  }
+  return target;
 }

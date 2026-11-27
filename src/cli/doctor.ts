@@ -23,9 +23,8 @@ export async function runDoctor(
     results.push({ status, name, detail, ...(fix ? { fix } : {}) });
 
   // Node
-  const [maj = 0, min = 0] = process.versions.node.split('.').map(Number);
-  if (maj > 20 || (maj === 20 && min >= 10)) add('ok', 'Node.js', `v${process.versions.node}`);
-  else add('fail', 'Node.js', `v${process.versions.node} (need ≥ 20.10)`, 'Install the current Node.js LTS');
+  if (supportedNodeVersion(process.versions.node)) add('ok', 'Node.js', `v${process.versions.node}`);
+  else add('fail', 'Node.js', `v${process.versions.node} (need ≥ 22.13)`, 'Install the current Node.js LTS');
 
   add('ok', 'tg-browser-mcp', `v${VERSION}`);
   add('ok', 'Configuration', configFile ? `valid (${configFile})` : 'valid (defaults; no config file found)');
@@ -157,4 +156,10 @@ export async function runDoctor(
   const failed = results.filter((r) => r.status === 'fail').length;
   console.log(failed ? `\n${failed} problem(s) found.` : '\nAll checks passed.');
   return failed ? 1 : 0;
+}
+
+/** Minimum unflagged node:sqlite runtime. Kept independent of driver imports for diagnostics. */
+export function supportedNodeVersion(version: string): boolean {
+  const [major = 0, minor = 0] = version.split('.').map(Number);
+  return major > 22 || (major === 22 && minor >= 13);
 }

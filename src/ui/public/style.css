@@ -1195,6 +1195,7 @@ ol.howto strong {
   color: var(--on-dark);
   font-size: 14px;
   z-index: 20;
+  pointer-events: none;
 }
 #notice:empty {
   display: none;

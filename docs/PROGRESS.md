@@ -1,6 +1,6 @@
 # Progress
 
-Last update: 2026-11-25
+Last update: 2026-11-27
 
 ## Completed
 
@@ -22,10 +22,34 @@ assertion masking (D7); SDK/MCP project addressing (D8); atomic run files (D9); 
 The local dashboard (previously "in progress", blocked in a sandbox) is verified by `dashboard.test.ts` on a real
 browser, including video retention.
 
+## V2 review — Phase 1 core and storage foundation (2026-11-27)
+
+Implements Phase 1 of [docs/reviews/v2](reviews/v2/15-IMPLEMENTATION-ROADMAP.md) (backlog TGB-012…TGB-017):
+
+- **TGB-012:** the action envelope (policy gate, per-page lock, budgets, settle, snapshot/diff) lives in
+  `harness/action-pipeline.ts`, with `inspectors.ts` and `artifact-service.ts`; `ActionExecutor` is a
+  compatible façade. Fake-page pipeline unit tests.
+- **TGB-013:** `ActionOutcome` + optional `expect` on mutating tools and the SDK (doc 04). Text output starts
+  with `✓` VERIFIED, `•` UNVERIFIED, `✗` FAILED or `?` INDETERMINATE; `success` is kept. Schema growth per
+  profile stays under 1.5k chars (`tests/unit/expect-schema-size.test.ts`).
+- **TGB-016:** `browser_fill` reports per-field results, pre-checks disabled/readonly fields, supports `ifEmpty`,
+  `continueOnError`, autocomplete and radio groups, reports ambiguity and validation messages, verifies by read-back.
+- **TGB-014:** `src/storage/` repository interfaces with atomic file implementations; no `fs` in
+  `workflow-engine.ts`; dashboard reads through repositories instead of a per-request `BrowserHarness`.
+- **TGB-015:** Node ≥ 22.13 (version 0.2.0, CI drops Node 20, `doctor` checks it). Runs and artifact metadata in
+  `dataDir/storage.sqlite` (0600, WAL) via `node:sqlite`; `tg-browser-mcp migrate --dry-run | --backup |
+--finalize` imports legacy JSON runs (see CONFIGURATION.md).
+- **TGB-017:** `within` container-scoped targets, container-scoped recorder/generator locators, session leases
+  (`SESSION_BUSY`) for concurrent workflow runs, opt-in 13-tool `core` profile, snapshot `complete` flag.
+
+Built in three parallel lanes and merged on `feat/phase1`. Test results (local, macOS, Node 24.18, Chrome
+headless, 2026-11-27): `npm test` → **38 files, 309 tests passed**; lint, typecheck, build clean. Storage and
+dashboard unit tests also pass on Node 22.13.1.
+
 ## Pending
 
 - npm publish, OS keychain integration, sub-resource redirect enforcement, Firefox/WebKit CI runs (see ROADMAP.md "Next").
-- V2 Phase 1+ (TGB-012…TGB-023): ActionPipeline, ActionOutcome + `expect`, SQLite storage, Browser Memory, adaptive matching (see [reviews/v2/16-DEVELOPMENT-BACKLOG.md](reviews/v2/16-DEVELOPMENT-BACKLOG.md)).
+- V2 Phase 2+ (TGB-018…TGB-023): Browser Memory, impact analyzer, adaptive matching, healing, workflow v2 (see [reviews/v2/16-DEVELOPMENT-BACKLOG.md](reviews/v2/16-DEVELOPMENT-BACKLOG.md)).
 
 ## Implementation backlog (prioritized, original plan)
 
@@ -75,6 +99,6 @@ See docs/SECURITY.md (limitations) and docs/SESSIONS.md (storage). Only Chrome w
 
 ## Next steps
 
-1. Push to a Git remote and let CI run the Windows/Linux/Node 20–24 matrix.
+1. Push to a Git remote and let CI run the Windows/Linux/Node 22.13–24 matrix.
 2. Connect from Claude Code/Codex with `.mcp.json` and try the maker-checker prompt on the fixture app.
 3. Publish to npm; then build the TG Studio event consumer.

@@ -62,13 +62,32 @@ export function defineTool<S extends ZodRawShape>(def: ToolDef<S>): ToolDef<S> {
 
 const PROFILE_ORDER: ToolProfile[] = ['minimal', 'developer', 'testing', 'full'];
 
+const CORE_TOOLS = new Set([
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_click',
+  'browser_fill',
+  'browser_select_option',
+  'browser_press_key',
+  'browser_wait',
+  'browser_dialog',
+  'browser_tabs',
+  'browser_errors',
+  'browser_screenshot',
+  'session_create',
+  'session_switch',
+]);
+
 /** Selects the tools advertised for a configuration (profile + explicit enable/disable lists). */
 export function selectTools(all: ToolDef[], cfg: TgConfig['tools']): ToolDef[] {
   const level = PROFILE_ORDER.indexOf(cfg.profile);
   const enabled = new Set(cfg.enabled);
   const disabled = new Set(cfg.disabled);
   return all.filter(
-    (t) => !disabled.has(t.name) && (PROFILE_ORDER.indexOf(t.profile) <= level || enabled.has(t.name)),
+    (t) =>
+      !disabled.has(t.name) &&
+      ((cfg.profile === 'core' ? CORE_TOOLS.has(t.name) : PROFILE_ORDER.indexOf(t.profile) <= level) ||
+        enabled.has(t.name)),
   );
 }
 
@@ -95,7 +114,23 @@ export function formatAction(r: ActionResult, format: 'text' | 'json'): ToolOutp
     const { image: _img, ...rest } = r;
     return json(rest);
   }
-  const lines = [`✓ ${r.message} · ${r.durationMs}ms · session=${r.session} page=${r.pageId}`];
+  const symbol = r.outcome
+    ? { VERIFIED: '✓', UNVERIFIED: '•', FAILED: '✗', INDETERMINATE: '?' }[r.outcome.verificationStatus]
+    : '✓';
+  const lines = [`${symbol} ${r.message} · ${r.durationMs}ms · session=${r.session} page=${r.pageId}`];
+  if (r.outcome)
+    lines.push(
+      `${r.outcome.verificationStatus}: ${r.outcome.failureReason ?? (r.outcome.verificationStatus === 'VERIFIED' ? 'Expectations passed' : 'No expectations supplied')}`,
+    );
+  for (const field of r.fieldResults ?? [])
+    lines.push(
+      `Field ${field.index + 1}${field.name ? ` (${field.name})` : ''}: ${field.status}${field.code ? ` [${field.code}]` : ''}${field.reason ? ` (${field.reason})` : ''}`,
+    );
+  if (r.fieldResults && r.data && typeof r.data === 'object') {
+    const report = r.data as { requiredMissing?: string[]; validationMessages?: string[] };
+    if (report.requiredMissing?.length) lines.push(`Required missing: ${report.requiredMissing.join(', ')}`);
+    if (report.validationMessages?.length) lines.push(`Validation: ${report.validationMessages.join('; ')}`);
+  }
   if (r.pageState) lines.push(r.pageState);
   for (const w of r.warnings) lines.push(`⚠ ${w}`);
   if (r.newPages?.length)

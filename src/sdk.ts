@@ -19,3 +19,14 @@ export type { HarnessEventMap, HarnessEventName } from './shared/events.js';
 export { TgError, type ErrorCode } from './shared/errors.js';
 export { detectBrowsers } from './browser/browser-detector.js';
 export { VERSION } from './version.js';
+
+export type {
+  ActionOutcome,
+  ExpectSpec,
+  VerificationStatus,
+  DispatchState,
+} from './harness/action-outcome.js';
+
+export type { FillField, FillOptions, FieldResult, FillReport } from './harness/form-filler.js';
+
+export type { VerificationSignals } from './harness/action-verifier.js';

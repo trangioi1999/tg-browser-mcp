@@ -1,3 +1,4 @@
+import { indexArtifactEvents } from '../storage/artifact-events.js';
 import fs from 'node:fs';
 import { SessionJournal } from '../journal/session-journal.js';
 import type { TgConfig, TgConfigInput } from '../config/schema.js';
@@ -31,6 +32,7 @@ export class BrowserHarness {
   readonly journal: SessionJournal;
   readonly config: TgConfig;
   readonly events = new TypedEmitter();
+  private readonly stopArtifactIndex: () => void;
   readonly policy: DomainPolicy;
   readonly redactor: DataRedactor;
   readonly permissions: PermissionManager;
@@ -48,6 +50,7 @@ export class BrowserHarness {
     fs.mkdirSync(this.config.dataDir, { recursive: true, mode: 0o700 });
     this.policy = new DomainPolicy(this.config.security);
     this.redactor = new DataRedactor(this.config.security.sensitiveFields);
+    this.stopArtifactIndex = indexArtifactEvents(this.config.dataDir, this.events);
     this.journal = new SessionJournal(this.config, this.redactor, this.events);
     this.permissions = new PermissionManager(this.config);
     this.audit = new AuditLogger(this.config.dataDir);
@@ -108,6 +111,7 @@ export class BrowserHarness {
     this.closed = true;
     await this.sessions.closeAll();
     await this.browsers.closeAll();
+    this.stopArtifactIndex();
   }
 }
 
@@ -129,36 +133,61 @@ export class HarnessSession {
 
   navigate(
     url: string,
-    opts: { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' } = {},
+    opts: { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' } & Pick<ActionContext, 'expect'> = {},
   ): Promise<ActionResult> {
     return this.h.actions.navigate(url, { ...this.ctx, ...opts });
   }
   async snapshot(opts: { scope?: string; page?: number; interactiveOnly?: boolean } = {}) {
     return this.h.actions.snapshot(opts, this.ctx);
   }
-  click(target: Target, opts: Parameters<ActionExecutor['click']>[1] = {}): Promise<ActionResult> {
-    return this.h.actions.click(target, opts, this.ctx);
+  click(
+    target: Target,
+    opts: Parameters<ActionExecutor['click']>[1] & Pick<ActionContext, 'expect'> = {},
+  ): Promise<ActionResult> {
+    return this.h.actions.click(target, opts, { ...this.ctx, ...opts });
   }
-  fill(target: Target, value: string, opts: { submit?: boolean } = {}): Promise<ActionResult> {
-    return this.h.actions.fill(target, value, opts, this.ctx);
+  fill(
+    target: Target,
+    value: string,
+    opts: { submit?: boolean } & Pick<ActionContext, 'expect'> = {},
+  ): Promise<ActionResult> {
+    return this.h.actions.fill(target, value, opts, { ...this.ctx, ...opts });
   }
-  fillForm(fields: Array<{ target: Target; value: string | boolean }>): Promise<ActionResult> {
-    return this.h.actions.fillForm(fields, this.ctx);
+  fillForm(
+    fields: Parameters<ActionExecutor['fillForm']>[0],
+    opts: import('./form-filler.js').FillOptions & Pick<ActionContext, 'expect'> = {},
+  ): Promise<ActionResult> {
+    return this.h.actions.fillForm(
+      fields,
+      { ...this.ctx, ...(opts.expect ? { expect: opts.expect } : {}) },
+      opts,
+    );
   }
-  type(target: Target | undefined, text: string): Promise<ActionResult> {
-    return this.h.actions.type(target, text, {}, this.ctx);
+  type(
+    target: Target | undefined,
+    text: string,
+    opts: Parameters<ActionExecutor['type']>[2] & Pick<ActionContext, 'expect'> = {},
+  ): Promise<ActionResult> {
+    return this.h.actions.type(target, text, opts, { ...this.ctx, ...opts });
   }
-  press(key: string, target?: Target): Promise<ActionResult> {
-    return this.h.actions.press(key, target, this.ctx);
+  press(key: string, target?: Target, opts: Pick<ActionContext, 'expect'> = {}): Promise<ActionResult> {
+    return this.h.actions.press(key, target, { ...this.ctx, ...opts });
   }
-  select(target: Target, values: string | string[]): Promise<ActionResult> {
-    return this.h.actions.selectOption(target, Array.isArray(values) ? values : [values], this.ctx);
+  select(
+    target: Target,
+    values: string | string[],
+    opts: Pick<ActionContext, 'expect'> = {},
+  ): Promise<ActionResult> {
+    return this.h.actions.selectOption(target, Array.isArray(values) ? values : [values], {
+      ...this.ctx,
+      ...opts,
+    });
   }
-  check(target: Target, checked = true): Promise<ActionResult> {
-    return this.h.actions.setChecked(target, checked, this.ctx);
+  check(target: Target, checked = true, opts: Pick<ActionContext, 'expect'> = {}): Promise<ActionResult> {
+    return this.h.actions.setChecked(target, checked, { ...this.ctx, ...opts });
   }
-  hover(target: Target): Promise<ActionResult> {
-    return this.h.actions.hover(target, this.ctx);
+  hover(target: Target, opts: Pick<ActionContext, 'expect'> = {}): Promise<ActionResult> {
+    return this.h.actions.hover(target, { ...this.ctx, ...opts });
   }
   wait(opts: Parameters<ActionExecutor['wait']>[0]): Promise<ActionResult> {
     return this.h.actions.wait(opts, this.ctx);
@@ -169,8 +198,12 @@ export class HarnessSession {
   screenshot(opts: Parameters<ActionExecutor['screenshot']>[0] = {}) {
     return this.h.actions.screenshot(opts, this.ctx);
   }
-  dialog(accept: boolean, promptText?: string): Promise<ActionResult> {
-    return this.h.actions.dialog(accept, promptText, this.ctx);
+  dialog(
+    accept: boolean,
+    promptText?: string,
+    opts: Pick<ActionContext, 'expect'> = {},
+  ): Promise<ActionResult> {
+    return this.h.actions.dialog(accept, promptText, { ...this.ctx, ...opts });
   }
   save() {
     return this.h.sessions.save(this.name, this.project);

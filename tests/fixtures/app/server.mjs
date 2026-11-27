@@ -305,6 +305,15 @@ document.getElementById('go').onclick = async () => {
       const user = userOf(req);
       const p = url.pathname;
 
+      if (p === '/duplicates')
+        return send(
+          res,
+          200,
+          `<!doctype html><title>Duplicates</title>
+        <form aria-label="First" data-testid="first"><label>Name<input></label><button type="button" onclick="this.dataset.clicked='yes'">Save</button></form>
+        <form aria-label="Second" data-testid="second"><label>Name<input></label><button type="button" onclick="this.dataset.clicked='yes'">Save</button></form>`,
+        );
+
       if (p === '/api/login' && req.method === 'POST') {
         const { username, password } = await body(req);
         const u = USERS[username];
@@ -400,6 +409,82 @@ document.getElementById('trash').addEventListener('drop', (e) => { e.preventDefa
         return send(res, 200, layout('Account deleted', '<h1>Account deleted</h1>', undefined));
       }
       // --- end ---
+      if (p === '/scoped-fill') {
+        return send(
+          res,
+          200,
+          layout(
+            'Scoped fill',
+            '<form aria-label="Billing"><label>Name<input name="billing"></label></form><form aria-label="Shipping"><label>Name<input name="shipping"></label></form>',
+            undefined,
+          ),
+        );
+      }
+      if (p === '/smart-form') {
+        return send(
+          res,
+          200,
+          layout(
+            'Smart form',
+            `
+<form aria-label="Request form">
+<label>Name<input name="customer" required></label>
+<label>Existing<input name="existing" value="preserved"></label>
+<label>Disabled<input name="disabled" disabled></label>
+<label>Readonly<input name="readonly" readonly value="fixed"></label>
+<label>Password<input name="password" type="password"></label>
+<label>Amount<input name="amount" aria-describedby="amount-error"></label><span id="amount-error"></span>
+<label>Category<select name="category"><option>Card</option><option>Loan</option></select></label><div id="dependent"></div>
+<label>City<input role="combobox" name="city" aria-controls="cities" aria-expanded="false" autocomplete="off"></label>
+<ul role="listbox" id="cities" hidden><li role="option">London</li><li role="option">Long Beach</li></ul>
+<fieldset role="radiogroup" aria-label="Priority"><legend>Priority</legend><label><input type="radio" name="priority" value="normal">Normal</label><label><input type="radio" name="priority" value="urgent">Urgent</label></fieldset>
+<label><input type="checkbox" name="notify">Notify</label>
+</form><p role="status" id="picked"></p>`,
+            undefined,
+            `
+const form=document.querySelector('form');
+form.elements.city.addEventListener('input',()=>{document.getElementById('cities').hidden=false;form.elements.city.setAttribute('aria-expanded','true');});
+document.querySelectorAll('[role=option]').forEach(o=>o.onclick=()=>{form.elements.city.value=o.textContent;document.getElementById('cities').hidden=true;form.elements.city.setAttribute('aria-expanded','false');document.getElementById('picked').textContent='Selected '+o.textContent;});
+form.elements.category.onchange=()=>{document.getElementById('dependent').innerHTML=form.elements.category.value==='Loan'?'<label>Loan term<input name="term" required></label>':'';};
+form.elements.amount.oninput=()=>{const invalid=form.elements.amount.value==='0';form.elements.amount.setAttribute('aria-invalid',String(invalid));document.getElementById('amount-error').textContent=invalid?'Must be greater than zero':'';};`,
+          ),
+        );
+      }
+      if (p === '/fill-submit') {
+        return send(
+          res,
+          200,
+          layout(
+            'Fill submit',
+            '<form><label>Note<input name="note"></label><button>Send note</button></form><p role="status">idle</p>',
+            undefined,
+            `document.querySelector('form').onsubmit=async e=>{e.preventDefault();await fetch('/api/slow-submit?ms=0',{method:'POST'});document.querySelector('[role=status]').textContent='sent';};`,
+          ),
+        );
+      }
+      if (p === '/outcome') {
+        return send(
+          res,
+          200,
+          layout(
+            'Outcome',
+            '<button id="go">Load result</button><p role="status" id="result"></p>',
+            undefined,
+            `document.getElementById('go').onclick = async () => { const r = await fetch('/api/outcome' + location.search); const data = await r.json(); document.getElementById('result').textContent = data.status === 'APPROVED' ? 'Pending Approval' : 'Rejected'; };`,
+          ),
+        );
+      }
+      if (p === '/api/outcome') {
+        return send(
+          res,
+          200,
+          JSON.stringify({
+            status: url.searchParams.get('status') || 'APPROVED',
+            password: 'outcome-fixture-secret',
+          }),
+          { 'Content-Type': 'application/json' },
+        );
+      }
       // --- combobox-ambiguity fixtures start (D18) ---
       if (p === '/combobox-ambiguous') {
         return send(

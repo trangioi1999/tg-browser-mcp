@@ -64,7 +64,7 @@ describe('MCP server over STDIO (spawned process, real client)', () => {
     let r = await call('browser_navigate', { url: `${base}/login` });
     expect(r.isError).toBeFalsy();
     let t = textOf(r);
-    expect(t).toMatch(/^✓ Navigated to/);
+    expect(t).toMatch(/^• Navigated to/);
     expect(t).not.toContain('New tabs opened');
     const user = /textbox "Username" \[required\] \[ref=(e\d+)\]/.exec(t)![1];
     const pw = /textbox "Password" \[required\] \[ref=(e\d+)\]/.exec(t)![1];
