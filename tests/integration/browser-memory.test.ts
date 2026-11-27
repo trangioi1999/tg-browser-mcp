@@ -187,6 +187,7 @@ describe('browser memory (real browser)', () => {
       'sid=',
     ])
       expect(all, secret).not.toContain(secret);
-    expect(fs.statSync(path.join(h.config.dataDir, 'storage.sqlite')).mode & 0o077).toBe(0);
+    if (process.platform !== 'win32')
+      expect(fs.statSync(path.join(h.config.dataDir, 'storage.sqlite')).mode & 0o077).toBe(0);
   });
 });
