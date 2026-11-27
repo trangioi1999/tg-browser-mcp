@@ -11,6 +11,8 @@ import { DataRedactor } from '../security/data-redactor.js';
 import { SessionStore } from '../session/session-store.js';
 import { RunStore, runProjects } from '../storage/store.js';
 import { FileWorkflowRepository } from '../storage/file-workflow-repository.js';
+import { SqliteAdapter } from '../storage/sqlite-adapter.js';
+import { SqliteMemoryRepository } from '../storage/sqlite-memory-repository.js';
 import { ProxyManager } from '../network/proxy-manager.js';
 import { CertificateManager } from '../network/certificate-manager.js';
 import { detectBrowsers } from '../browser/browser-detector.js';
@@ -440,6 +442,49 @@ export async function startDashboard(
       runs: history(wf.name).slice(0, 20),
     };
   };
+  /**
+   * Read-only Memory Explorer (TGB-018). Opens the database read-only; memory content is untrusted
+   * page data and is rendered with textContent by the client. Every query is bound to project + scope.
+   */
+  const memory = <T>(fn: (repo: SqliteMemoryRepository) => T, fallback: T): T => {
+    if (!fs.existsSync(path.join(dataDir, 'storage.sqlite'))) return fallback;
+    const db = new SqliteAdapter(dataDir, true);
+    try {
+      if (!db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='scopes'")) return fallback;
+      return fn(new SqliteMemoryRepository(db));
+    } finally {
+      db.close();
+    }
+  };
+  const memoryScopes = (project: string) =>
+    memory(
+      (repo) => repo.scopes(project).map((s) => ({ ...s, pages: repo.pages(s.id, 1000).length })),
+      [] as unknown[],
+    );
+  const memoryScope = (project: string, scopeId: number) =>
+    memory((repo) => {
+      const scope = repo.scope(project, scopeId);
+      if (!scope) throw new HttpError(404, 'Không tìm thấy phạm vi bộ nhớ');
+      return {
+        scope,
+        pages: repo.pages(scopeId).map((p) => ({
+          ...p,
+          versions: repo.versions(scopeId, p.id, 20).map(({ shapeHash, labelHash, ...v }) => ({
+            ...v,
+            shape: shapeHash.slice(0, 8),
+            labels: labelHash.slice(0, 8),
+          })),
+        })),
+        events: repo.events(scopeId, 50),
+      };
+    }, undefined);
+  const memoryVersion = (project: string, scopeId: number, versionId: number) =>
+    memory((repo) => {
+      if (!repo.scope(project, scopeId)) throw new HttpError(404, 'Không tìm thấy phạm vi bộ nhớ');
+      const version = repo.version(scopeId, versionId);
+      if (!version) throw new HttpError(404, 'Không tìm thấy phiên bản');
+      return { version, elements: repo.elementsOf(scopeId, versionId, 1000) };
+    }, undefined);
   const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Security-Policy', CSP);
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -569,6 +614,26 @@ export async function startDashboard(
           certificates: new CertificateManager(effective.network.tls).status(),
         });
       if (rawPath === '/api/projects') return json(200, projects());
+      if (rawPath === '/api/memory') {
+        const ps = u.searchParams.has('project')
+          ? [assertSafeName('project', u.searchParams.get('project')!)]
+          : [...new Set([...projects(), ...memory((repo) => repo.projects(), [] as string[])])];
+        return json(
+          200,
+          ps.flatMap((p) => memoryScopes(p)),
+        );
+      }
+      {
+        const m = /^\/api\/memory\/([^/]+)\/(\d{1,12})(?:\/versions\/(\d{1,12}))?$/.exec(rawPath);
+        if (m) {
+          const project = assertSafeName('project', m[1]!);
+          const found = m[3]
+            ? memoryVersion(project, Number(m[2]), Number(m[3]))
+            : memoryScope(project, Number(m[2]));
+          if (!found) throw new HttpError(404, 'Không tìm thấy');
+          return json(200, found);
+        }
+      }
       if (rawPath === '/api/workflows') {
         const ps = u.searchParams.has('project')
           ? [assertSafeName('project', u.searchParams.get('project')!)]

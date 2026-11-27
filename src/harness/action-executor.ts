@@ -59,6 +59,21 @@ export class ActionExecutor {
     return this.pipeline.artifactsDir;
   }
 
+  /** Browser Memory (observe-only, opt-in via `memory.enabled`). */
+  get memory() {
+    return this.pipeline.memory;
+  }
+
+  /** Read-only known-page summary of the page's last snapshot (memory_page_info). Never writes memory. */
+  async memoryPageInfo(ctx: ActionContext = {}): Promise<string> {
+    if (!this.pipeline.memory.enabled) return 'Memory is disabled (memory.enabled=false).';
+    const s = await this.pipeline.sessionFor(ctx.session, ctx.project);
+    const ps = await this.pipeline.ensurePage(s, ctx.pageId);
+    const snap = ps.lastSnapshot;
+    if (!snap) return 'No snapshot of this page yet: call browser_snapshot first.';
+    return this.pipeline.memory.pageInfo(snap, { project: s.project, authContext: s.authContext });
+  }
+
   private record(
     s: Session,
     action: string,

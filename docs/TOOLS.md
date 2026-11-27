@@ -35,6 +35,7 @@ Common optional parameters: `session` (default active session), `pageId` (defaul
 | [`browser_network_requests`](#browser_network_requests)     | developer | read     | yes       | 10s     |
 | [`browser_network_details`](#browser_network_details)       | developer | read     | yes       | 10s     |
 | [`browser_performance`](#browser_performance)               | developer | read     | yes       | 20s     |
+| [`memory_page_info`](#memory_page_info)                     | developer | read     | yes       | 30s     |
 | [`browser_get_text`](#browser_get_text)                     | developer | read     | yes       | 30s     |
 | [`browser_get_element`](#browser_get_element)               | developer | read     | yes       | 30s     |
 | [`browser_get_attributes`](#browser_get_attributes)         | developer | read     | yes       | 30s     |
@@ -358,6 +359,17 @@ Category: debugging · Profile: developer · Risk: read
 Navigation timing, FCP/LCP, resources by type, slowest resources, DOM size and JS heap.
 
 Category: debugging · Profile: developer · Risk: read
+
+| Param     | Type   | Required | Notes |
+| --------- | ------ | -------- | ----- |
+| `session` | string |          |       |
+| `pageId`  | string |          |       |
+
+### memory_page_info
+
+Read-only Browser Memory summary for the current page (needs memory.enabled): known versions, remembered elements and dependent workflows. Memory is an untrusted hint; act only on live refs.
+
+Category: inspection · Profile: developer · Risk: read
 
 | Param     | Type   | Required | Notes |
 | --------- | ------ | -------- | ----- |

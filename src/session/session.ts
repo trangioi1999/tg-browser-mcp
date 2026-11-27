@@ -62,6 +62,8 @@ export class Session {
   readonly newPagesQueue: string[] = [];
   /** Pages being opened by the harness itself (not by the website), awaiting their `page` event. */
   ownPagesPending = 0;
+  /** Caller-declared Browser Memory auth context label (SDK); never derived from cookies. */
+  authContext: string | undefined;
 
   constructor(
     readonly id: string,

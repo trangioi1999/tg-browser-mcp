@@ -41,7 +41,7 @@ Removed:
 | **Testing**         | Web-first assertions, **Playwright Test generation** (multi-context, semantic locators, secrets from env), Markdown + JUnit reports                                                                                                             |
 | **Network**         | HTTP/HTTPS/SOCKS proxies, env (`HTTP(S)_PROXY`, `NO_PROXY`), per-session proxy, credentials from env only, corporate CA status, step-by-step diagnostics (policy → DNS → TCP/proxy → TLS → HTTP)                                                |
 | **Security**        | Domain allow/deny lists, cloud-metadata + private-network blocking (incl. redirects, popups, sub-requests, WebSockets, DNS rebinding check), file-root restrictions, approval via MCP elicitation, audit log, redaction, no JS/shell eval tools |
-| **Profiles**        | `minimal` (8 tools) · `developer` (40) · `testing` (61) · `full` (69) — only enabled tools are advertised                                                                                                                                       |
+| **Profiles**        | `minimal` (8 tools) · `core` (13) · `developer` (41) · `testing` (62) · `full` (70) — only enabled tools are advertised                                                                                                                         |
 | **SDK**             | `BrowserHarness` usable without MCP, typed lifecycle events for TG Studio                                                                                                                                                                       |
 
 ## Quick start

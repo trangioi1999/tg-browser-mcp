@@ -30,6 +30,8 @@ import { shortId, sleep } from '../shared/util.js';
 import { type Resolved } from './target.js';
 
 import type { ElementDescription } from '../snapshot/injected.js';
+import { MemoryService } from '../memory/memory-service.js';
+import { collectActed } from './acted-targets.js';
 
 export type SnapshotMode = 'diff' | 'full' | 'none';
 
@@ -57,6 +59,8 @@ export interface ActionResult {
   durationMs: number;
   url: string;
   diff?: SnapshotDiff;
+  /** One-line Browser Memory summary (only when memory is enabled and a full snapshot was returned). */
+  memory?: string;
   /** Formatted diff or full snapshot text, ready to show to the model. */
   pageState?: string;
   warnings: string[];
@@ -75,6 +79,7 @@ const MIN_INNER_TIMEOUT_MS = 500;
 
 export class ActionPipeline {
   readonly gate: PolicyGate;
+  readonly memory: MemoryService;
 
   constructor(
     readonly cfg: TgConfig,
@@ -85,6 +90,7 @@ export class ActionPipeline {
     readonly events: TypedEmitter,
   ) {
     this.gate = new PolicyGate(permissions);
+    this.memory = new MemoryService(cfg);
   }
 
   get artifactsDir(): string {
@@ -176,11 +182,13 @@ export class ActionPipeline {
       const prev = ps.lastSnapshot;
       const next = await captureSnapshot(ps.page, ps.refs, this.snapshotOpts());
       ps.lastSnapshot = next;
+      const memory = this.memory.observe(next, { project: s.project, authContext: s.authContext });
       if (mode === 'diff' && prev && prev.docId === next.docId) {
         res.diff = diffSnapshots(prev, next);
         res.pageState = formatDiff(res.diff);
       } else {
         res.pageState = formatSnapshot(next, { maxChars: this.cfg.snapshot.maxChars }).text;
+        if (memory) res.memory = memory.summary;
       }
     }
     const fresh = s.newPagesQueue.splice(0);
@@ -254,7 +262,9 @@ export class ActionPipeline {
       await verifier.ready();
       if (currentScope()?.signal.aborted) throw currentScope()!.signal.reason;
       if (action !== 'wait') markDispatched();
-      const work = fn(s, ps);
+      // The element(s) acted on belong to the page as last observed, before the action changes it.
+      const before = ps.lastSnapshot;
+      const { result: work, acted } = collectActed(() => fn(s, ps));
       // If a dialog wins the race, the blocked action may reject later; never leave it unhandled.
       work.catch(() => undefined);
       type Out = { message: string; extra?: Partial<ActionResult>; mode?: SnapshotMode };
@@ -277,6 +287,7 @@ export class ActionPipeline {
         (ctx.retryable ?? ['fill', 'check', 'uncheck', 'hover', 'navigate', 'wait'].includes(action)) &&
           classifyAction(action, { name: targetDesc }) !== 'high-impact',
       );
+      if (res.outcome.verificationStatus === 'VERIFIED') this.memory.verify(before, acted);
       res.durationMs = Date.now() - t0;
       this.events.emit('action.completed', {
         sessionId: s.id,

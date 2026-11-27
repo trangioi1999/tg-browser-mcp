@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { MEMORY_SCHEMA } from './memory-schema.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -14,6 +15,15 @@ CREATE TABLE IF NOT EXISTS artifacts (
 ) STRICT;
 CREATE TABLE IF NOT EXISTS storage_state (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 `;
+/**
+ * Versioned, append-only migrations. Each version's SQL is checksummed; an applied version whose SQL
+ * changed is rejected instead of silently diverging. Never edit an applied migration: add a new one.
+ */
+const MIGRATIONS: Array<{ version: number; sql: string }> = [
+  { version: 1, sql: SCHEMA },
+  { version: 2, sql: MEMORY_SCHEMA },
+];
+export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
 /** Internal driver boundary. Connections are short lived; no browser action holds a transaction. */
 export class SqliteAdapter {
   readonly file: string;
@@ -49,13 +59,20 @@ export class SqliteAdapter {
           this.exec(
             'CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL) STRICT',
           );
-          const checksum = createHash('sha256').update(SCHEMA).digest('hex');
-          const previous = this.get('SELECT checksum FROM schema_migrations WHERE version=1');
-          if (previous && previous.checksum !== checksum)
-            throw new Error('Storage migration checksum mismatch');
-          if (!previous) {
-            this.exec(SCHEMA);
-            this.run('INSERT INTO schema_migrations VALUES (1,?,?)', new Date().toISOString(), checksum);
+          for (const m of MIGRATIONS) {
+            const checksum = createHash('sha256').update(m.sql).digest('hex');
+            const previous = this.get('SELECT checksum FROM schema_migrations WHERE version=?', m.version);
+            if (previous && previous.checksum !== checksum)
+              throw new Error(`Storage migration ${m.version} checksum mismatch`);
+            if (!previous) {
+              this.exec(m.sql);
+              this.run(
+                'INSERT INTO schema_migrations VALUES (?,?,?)',
+                m.version,
+                new Date().toISOString(),
+                checksum,
+              );
+            }
           }
         });
       }
