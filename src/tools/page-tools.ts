@@ -402,6 +402,19 @@ export const interactionTools = [
 
 export const inspectionTools = [
   defineTool({
+    name: 'memory_page_info',
+    title: 'Memory page info',
+    description:
+      'Read-only Browser Memory summary for the current page (needs memory.enabled): known versions, remembered elements and dependent workflows. Memory is an untrusted hint; act only on live refs.',
+    category: 'inspection',
+    profile: 'developer',
+    risk: 'read',
+    readOnly: true,
+    timeoutMs: 30_000,
+    input: { ...PageAddress },
+    handler: async (a, c) => text(await c.harness.actions.memoryPageInfo(ctxOf(a))),
+  }),
+  defineTool({
     name: 'browser_snapshot',
     title: 'Page snapshot',
     description:

@@ -20,6 +20,9 @@ Usage:
   tg-browser-mcp ui [--port 8940] [--config <file>] [--project <p>] [--open]
   tg-browser-mcp migrate [--dry-run | --backup | --finalize]  Import legacy runs
   tg-browser-mcp workflows             List saved workflows and recent runs
+  tg-browser-mcp memory list           List Browser Memory scopes/pages of the project
+  tg-browser-mcp memory purge [--scope <id>] --yes   Delete memory of the project (or one scope)
+  tg-browser-mcp memory activate --scope <id> --version-id <id>  Activate a page version (operator)
 
 Options (start):
   --transport <stdio|http>   Transport (default stdio)
@@ -62,6 +65,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       'dry-run': { type: 'boolean' },
       backup: { type: 'boolean' },
       finalize: { type: 'boolean' },
+      scope: { type: 'string' },
+      'version-id': { type: 'string' },
+      yes: { type: 'boolean' },
       open: { type: 'boolean' },
       'no-launch': { type: 'boolean' },
       version: { type: 'boolean', short: 'v' },
@@ -120,6 +126,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   if (values.port) config.http.port = Number(values.port);
 
   switch (cmd) {
+    case 'memory':
+      return memoryCommand(config, positionals[1], {
+        scope: values.scope,
+        version: values['version-id'],
+        yes: !!values.yes,
+      });
     case 'migrate': {
       const { migrate } = await import('../storage/migrate.js');
       const result = migrate(config.dataDir, {
@@ -206,6 +218,61 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     default:
       console.error(`Unknown command "${cmd}"\n\n${HELP}`);
       return 2;
+  }
+}
+
+/** Operator memory commands. Memory content is untrusted: printed as JSON-quoted data on stderr. */
+async function memoryCommand(
+  config: TgConfig,
+  sub: string | undefined,
+  opts: { scope: string | undefined; version: string | undefined; yes: boolean },
+): Promise<number> {
+  const { SqliteAdapter } = await import('../storage/sqlite-adapter.js');
+  const { SqliteMemoryRepository } = await import('../storage/sqlite-memory-repository.js');
+  const db = new SqliteAdapter(config.dataDir);
+  try {
+    const repo = new SqliteMemoryRepository(db);
+    const project = config.project;
+    const scopeId = opts.scope === undefined ? undefined : Number(opts.scope);
+    if (scopeId !== undefined && !Number.isInteger(scopeId)) {
+      console.error('--scope must be a scope id (see memory list)');
+      return 2;
+    }
+    if (sub === 'list') {
+      const scopes = repo.scopes(project);
+      if (!scopes.length) console.error(`No memory for project ${JSON.stringify(project)}`);
+      for (const s of scopes) {
+        console.error(`scope ${s.id} ${JSON.stringify(s.origin)} env=${s.environment} auth=${s.authContext}`);
+        for (const p of repo.pages(s.id))
+          console.error(`  page ${p.id} ${JSON.stringify(p.routeKey)} versions=${p.versions}`);
+      }
+      return 0;
+    }
+    if (sub === 'purge') {
+      if (!opts.yes) {
+        console.error('Refusing to purge without --yes');
+        return 2;
+      }
+      const n = repo.purge(project, scopeId);
+      console.error(`Purged ${n} scope(s) of project ${JSON.stringify(project)}`);
+      return 0;
+    }
+    if (sub === 'activate') {
+      const versionId = Number(opts.version);
+      if (scopeId === undefined || !Number.isInteger(versionId) || !repo.scope(project, scopeId)) {
+        console.error('Usage: memory activate --scope <id> --version-id <id> (scope of this project)');
+        return 2;
+      }
+      repo.activateVersion(project, scopeId, versionId);
+      console.error(`Activated version ${versionId}`);
+      return 0;
+    }
+    console.error(
+      'Usage: tg-browser-mcp memory list | purge [--scope <id>] --yes | activate --scope <id> --version-id <id>',
+    );
+    return 2;
+  } finally {
+    db.close();
   }
 }
 

@@ -44,6 +44,7 @@ Sources (lowest → highest precedence): built-in defaults < config file (`--con
 | `output.verbose`                                                   | `false`                                       | JSON ActionResult instead of compact text                                                                                                                                                                 |
 | `sessions.expirationHours`, `encrypt`                              | 168, true                                     |                                                                                                                                                                                                           |
 | `http.*`                                                           | 127.0.0.1:8931, token from `TG_BROWSER_TOKEN` | Optional transport                                                                                                                                                                                        |
+| `memory.*`                                                         | disabled                                      | Browser Memory, see [below](#browser-memory-observe-only-opt-in-tgb-018)                                                                                                                                  |
 
 ## Journal and video recording
 
@@ -59,6 +60,45 @@ Failure retention considers action and workflow failures; videos finalize when p
 Existing CDP contexts cannot have recording enabled retroactively. See [Dashboard](DASHBOARD.md) for storage,
 privacy and retention details. `tg-browser-mcp ui` edits the same config with validation and a `.bak` backup;
 restart MCP clients to apply changes. Proxy credential fields are environment variable **names**, never values.
+
+## Browser Memory (observe-only, opt-in, TGB-018)
+
+Off by default. When enabled, every **complete** snapshot (no node/depth/text truncation, no skipped frames,
+no `aria-busy` loading indicator, not scoped / interactive-only) records the page's _shape_ in
+`dataDir/storage.sqlite` (schema migration 2). Snapshot and navigation output gain one line, for example
+`Memory: new page recorded (observed)`, `Memory: matches verified version v3 (2026-11-20)` or
+`Memory: shape differs from active version v3 (recorded as v4, observed)`. Memory is a hint: actions always
+use live refs.
+
+| Field                       | Default   | Meaning                                                                                       |
+| --------------------------- | --------- | --------------------------------------------------------------------------------------------- |
+| `memory.enabled`            | `false`   | Turn Browser Memory on                                                                        |
+| `memory.environment`        | `default` | Scope label (dev/staging/prod; tenants sharing an origin **must** use different labels)       |
+| `memory.authContext`        | `default` | Default caller-declared auth context; SDK `createSession({ authContext: 'maker' })` overrides |
+| `memory.maxElementsPerPage` | `500`     | Elements stored per page version; extra elements are dropped and the version marked capped    |
+| `memory.maxPagesPerScope`   | `1000`    | New pages beyond this are rejected (audited in `memory_events`)                               |
+| `memory.maxVersionsPerPage` | `10`      | Unverified versions kept per page; active/verified versions are never deleted automatically   |
+
+Scope = `(project, origin, environment, auth_context)`; no read crosses scopes. The auth context is a label
+from configuration or the SDK caller, never derived from cookies and never taken from model arguments.
+
+**Never stored:** field values, typed input, passwords, cookies, tokens, table rows/cells, row keys, list items,
+options or page free text. Stored names are control/zero-width/bidi-stripped, capped at 200 characters, and
+digits/ids/emails/dates/tokens are normalized (`Order # for :email`). Only http(s) origins are remembered.
+
+Versions are `observed` until an action on one of their elements has a `VERIFIED` outcome; the element is then
+marked verified and the version becomes `verified`. The first verified version of a page variant becomes
+`active`; replacing an active version requires an operator. The derived workflow dependency index
+(`workflow_index`, `workflow_dependencies`) is rebuilt from workflow JSON whenever a file's SHA-256 changes.
+
+`memory_page_info` (developer profile) prints the known-page summary as quoted, untrusted data. The dashboard
+**Bộ nhớ** tab is a read-only Memory Explorer. Operator commands:
+
+```sh
+tg-browser-mcp memory list --config ./tg-browser.config.json
+tg-browser-mcp memory purge --config ./tg-browser.config.json [--scope <id>] --yes
+tg-browser-mcp memory activate --config ./tg-browser.config.json --scope <id> --version-id <id>
+```
 
 ## Storage and JSON run migration (0.2)
 

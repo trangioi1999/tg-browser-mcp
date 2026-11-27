@@ -17,6 +17,7 @@ export class Inspectors {
     totalPages: number;
     sessionId: string;
     pageId: string;
+    memory?: string;
   }> {
     const s = await this.pipeline.sessionFor(ctx.session, ctx.project);
     const ps = await this.pipeline.ensurePage(s, ctx.pageId);
@@ -32,15 +33,29 @@ export class Inspectors {
         });
       }
       if (!opts.scope && !opts.interactiveOnly) ps.lastSnapshot = snap;
+      // Collection completeness decides storage; presentation pagination does not lose page shape.
+      const memory =
+        !opts.scope && !opts.interactiveOnly
+          ? this.pipeline.memory.observe(snap, { project: s.project, authContext: s.authContext })
+          : undefined;
       const f = formatSnapshot(snap, {
         maxChars: Math.min(opts.maxChars ?? this.pipeline.cfg.snapshot.maxChars, 200_000),
         ...(opts.page ? { page: opts.page } : {}),
       });
       snap.complete = f.complete;
       let text = f.text;
+      if (memory) text += `\n${memory.summary}`;
       if (ps.pendingDialog)
         text += `\n\n[dialog open] ${ps.pendingDialog.type}: "${ps.pendingDialog.message}" — call browser_dialog`;
-      return { text, snapshot: snap, page: f.page, totalPages: f.totalPages, sessionId: s.id, pageId: ps.id };
+      return {
+        text,
+        snapshot: snap,
+        page: f.page,
+        totalPages: f.totalPages,
+        sessionId: s.id,
+        pageId: ps.id,
+        ...(memory ? { memory: memory.summary } : {}),
+      };
     });
   }
 

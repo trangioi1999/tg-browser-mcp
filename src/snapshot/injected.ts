@@ -13,6 +13,11 @@ export interface RefGuard {
   keys: Record<string, string>;
   container?: string;
   rowKey?: string;
+  /**
+   * Nearest fieldset legend or landmark (`fieldset:Priority`, `navigation:Main`). Memory-only context
+   * (doc 03 §5); not part of the ref guard comparison.
+   */
+  group?: string;
 }
 
 export interface RawNode {
@@ -51,6 +56,10 @@ export interface CollectResult {
   url: string;
   title: string;
   framework?: string;
+  /** Optional build metadata (ng-version, meta version, main bundle name): an invalidation signal only. */
+  buildHint?: string;
+  /** A loading indicator (`aria-busy=true`) was rendered: the snapshot is marked incomplete. */
+  busy?: boolean;
 }
 
 export interface ElementDescription {
@@ -531,6 +540,7 @@ export function tgInstall(nonce: string, accessKey: string): void {
     let truncated = false;
     let depthTruncated = false;
     let textTruncated = false;
+    let busy = false;
     const keys = args.sensitiveKeys.map((k) => k.toLowerCase());
 
     function mergeText(list: RawNode[]): RawNode[] {
@@ -597,6 +607,7 @@ export function tgInstall(nonce: string, accessKey: string): void {
         return summary ? walk(summary, depth, suppressText) : [];
       }
       const hiddenSelf = style.visibility === 'hidden' || style.visibility === 'collapse';
+      if (!hiddenSelf && attr(el, 'aria-busy') === 'true') busy = true;
       let role = hiddenSelf ? '' : implicitRole(el);
       // A <label> bound to a control is just its caption (clicking it toggles the control): not a separate target.
       const isControlLabel = tag === 'label' && !!(el as HTMLLabelElement).control;
@@ -696,14 +707,38 @@ export function tgInstall(nonce: string, accessKey: string): void {
     } else if ((window as any).React || document.querySelector('[data-reactroot]')) framework = 'React';
     else if ((window as any).__VUE__) framework = 'Vue';
 
+    let buildHint: string | undefined;
+    const hints: string[] = [];
+    try {
+      const ngEl = document.querySelector('[ng-version]');
+      const ngVersion = ngEl ? attr(ngEl, 'ng-version') : null;
+      if (ngVersion) hints.push(`ng=${ngVersion}`);
+      const metaEl = document.querySelector('meta[name="version"],meta[name="build"]');
+      const metaVersion = metaEl ? attr(metaEl, 'content') : null;
+      if (metaVersion) hints.push(`meta=${metaVersion}`);
+      for (const sc of Array.from(document.querySelectorAll('script[src]'))) {
+        const file = (attr(sc, 'src') || '').split('?')[0]!.split('/').pop() || '';
+        if (/^main[.-][\w-]{6,}\.js$/.test(file)) {
+          hints.push(`main=${file}`);
+          break;
+        }
+      }
+    } catch {
+      // Build hints are optional; minimal or tampered documents simply have none.
+    }
+    if (hints.length) buildHint = hints.join(' ').slice(0, 200);
+
     return {
       docId: st.docId,
       nextIndex: counter.n,
       nodes,
       nodeCount,
       truncatedByNodeLimit: truncated,
-      complete: !truncated && !depthTruncated && !textTruncated && !scopeMissing && !args.scopeRef && !!root,
+      complete:
+        !truncated && !depthTruncated && !textTruncated && !busy && !scopeMissing && !args.scopeRef && !!root,
       ...(scopeMissing ? { scopeMissing } : {}),
+      ...(busy ? { busy } : {}),
+      ...(buildHint ? { buildHint } : {}),
       url: location.href,
       title: document.title,
       ...(framework ? { framework } : {}),
@@ -738,7 +773,24 @@ export function tgInstall(nonce: string, accessKey: string): void {
             container: `${implicitRole(container)}:${accName(container, implicitRole(container))}:${attr(container, 'id') || ''}`,
           }
         : {}),
+      ...groupOf(el),
     };
+  }
+
+  function groupOf(el: Element): { group?: string } {
+    const fieldset = closest(el, 'fieldset');
+    if (fieldset && fieldset !== el) {
+      const legend = query(fieldset, ':scope > legend');
+      const label = norm(attr(fieldset, 'aria-label') || (legend ? textOf(legend) : ''));
+      if (label) return { group: `fieldset:${label.slice(0, 80)}` };
+    }
+    const landmark = closest(
+      el,
+      'nav,main,header,footer,aside,[role=navigation],[role=main],[role=banner],[role=contentinfo],[role=complementary],[role=search]',
+    );
+    if (!landmark || landmark === el) return {};
+    const role = implicitRole(landmark) || landmark.tagName.toLowerCase();
+    return { group: `${role}:${accName(landmark, role).slice(0, 80)}` };
   }
 
   function describe(el: Element): ElementDescription {

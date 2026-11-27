@@ -165,7 +165,29 @@ export const HttpConfigSchema = z.object({
     .default(120),
 });
 
+export const MemoryConfigSchema = z.object({
+  /** Browser Memory (observe-only): remembers page *shape* from complete snapshots. Off by default. */
+  enabled: z.boolean().default(false),
+  /** Scope label: separates e.g. dev/staging/prod or tenants on the same origin. */
+  environment: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+    .default('default'),
+  /** Default caller-declared auth context label (SDK sessions may declare their own). Never derived from cookies. */
+  authContext: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+    .default('default'),
+  /** Poisoning control: elements remembered per page version (the rest is dropped, version marked capped). */
+  maxElementsPerPage: z.number().int().min(10).max(2000).default(500),
+  /** Poisoning control: pages remembered per scope; new pages beyond it are rejected (memory_events). */
+  maxPagesPerScope: z.number().int().min(1).max(100_000).default(1000),
+  /** Unverified versions kept per page (active/verified versions are never deleted automatically). */
+  maxVersionsPerPage: z.number().int().min(1).max(100).default(10),
+});
+
 export const ConfigSchema = z.object({
+  memory: MemoryConfigSchema.default(MemoryConfigSchema.parse({})),
   workflows: z
     .object({
       /** Allow inline workflow definitions to reference TG_SECRET_* in fill/type values. */

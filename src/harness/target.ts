@@ -1,3 +1,4 @@
+import { noteActed } from './acted-targets.js';
 import { crossCheckDescription, type ResolveIntent } from '../snapshot/guard.js';
 import { z } from 'zod';
 import type { ElementHandle, Frame, Locator } from 'playwright';
@@ -95,10 +96,22 @@ export async function resolveTarget(
   timeout: number,
   intent: ResolveIntent = 'action',
 ): Promise<Resolved> {
+  const r = await resolveTargetInner(ps, t, timeout, intent);
+  // Containers resolved for `within` are not acted on; only the outermost target is noted.
+  if (intent !== 'read') noteActed(r.desc.guard);
+  return r;
+}
+
+async function resolveTargetInner(
+  ps: PageState,
+  t: Target,
+  timeout: number,
+  intent: ResolveIntent,
+): Promise<Resolved> {
   if (t.ref) {
     const { handle, entry, desc } = await ps.refs.resolve(t.ref, intent);
     if (t.within) {
-      const container = await resolveTarget(ps, t.within, timeout, intent);
+      const container = await resolveTargetInner(ps, t.within, timeout, intent);
       if (container.frame !== entry.frame)
         throw new TgError('ELEMENT_NOT_FOUND', 'Target is outside its container frame');
       const root = container.kind === 'handle' ? container.handle : await container.locator.elementHandle();
@@ -129,7 +142,7 @@ export async function resolveTarget(
   let frame = ps.frame();
   let root: Frame | Locator = frame;
   if (t.within) {
-    const container = await resolveTarget(ps, t.within, timeout, intent);
+    const container = await resolveTargetInner(ps, t.within, timeout, intent);
     frame = container.frame;
     root = container.kind === 'locator' ? container.locator : await handleLocator(frame, container.handle);
   }

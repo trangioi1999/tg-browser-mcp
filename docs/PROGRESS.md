@@ -5,7 +5,7 @@ Last update: 2026-11-27
 ## Completed
 
 - Phase 0–4 complete; Phase 5 except npm publication (see ROADMAP.md).
-- 69 MCP tools across 10 categories; profiles minimal (8) / developer (40) / testing (61) / full (69).
+- 70 MCP tools across 10 categories; profiles minimal (8) / core (13) / developer (41) / testing (62) / full (70).
 - Docs: README, architecture, installation, configuration, CLI, tools (generated), clients, proxy & troubleshooting, sessions, Angular, workflows, security model, threat model, TG Studio, benchmark, roadmap, 6 ADRs, contributing.
 
 ## V2 review — Phase 0 stabilization (2026-11-25)
@@ -46,10 +46,30 @@ Built in three parallel lanes and merged on `feat/phase1`. Test results (local, 
 headless, 2026-11-27): `npm test` → **38 files, 309 tests passed**; lint, typecheck, build clean. Storage and
 dashboard unit tests also pass on Node 22.13.1.
 
+## V2 review — Phase 2 Browser Memory, observe-only (2026-11-27)
+
+Implements Phase 2 of [docs/reviews/v2](reviews/v2/15-IMPLEMENTATION-ROADMAP.md) (TGB-018, TGB-019 index part):
+
+- **Storage:** schema migration 2 (`scopes`, `pages`, `page_versions`, `elements`, `element_observations`,
+  `memory_events`, `workflow_index`, `workflow_dependencies`); version-1 databases upgrade in place.
+- **Memory (`src/memory/`):** scope `(project, origin, environment, auth_context)`; route/page/variant keys;
+  fingerprints and shape/label hashes; observed → verified → active versions; verification marking only from
+  `VERIFIED` outcomes on uniquely matched elements; one `Memory: …` summary line on full snapshots.
+- **Poisoning controls:** complete snapshots only, element/page/version caps, sanitized ≤ 200-char labels,
+  audit in `memory_events`, operator purge/activate via CLI; no MCP tool writes memory.
+- **Read paths:** `memory_page_info` tool (developer profile), dashboard Memory Explorer (read-only), CLI `memory list`.
+- **TGB-019 (index):** derived workflow dependency index keyed by file sha256, rebuilt automatically when stale.
+  The impact analyzer stays in Phase 3.
+
+Off by default (`memory.enabled=false`). Test results (local, macOS, Node 24.18, Chrome headless):
+`npm test` → **40 files, 327 tests passed**; lint, typecheck clean. Covered scenarios 18 (two processes, one
+version row), 20 (hostile labels, caps, incomplete snapshots), 21 (cross-project isolation) and a DB scan for
+values.
+
 ## Pending
 
 - npm publish, OS keychain integration, sub-resource redirect enforcement, Firefox/WebKit CI runs (see ROADMAP.md "Next").
-- V2 Phase 2+ (TGB-018…TGB-023): Browser Memory, impact analyzer, adaptive matching, healing, workflow v2 (see [reviews/v2/16-DEVELOPMENT-BACKLOG.md](reviews/v2/16-DEVELOPMENT-BACKLOG.md)).
+- V2 Phase 3+ (TGB-019 analyzer, TGB-020…TGB-023): impact analyzer, adaptive matching, healing, workflow v2 (see [reviews/v2/16-DEVELOPMENT-BACKLOG.md](reviews/v2/16-DEVELOPMENT-BACKLOG.md)).
 
 ## Implementation backlog (prioritized, original plan)
 
@@ -99,6 +119,6 @@ See docs/SECURITY.md (limitations) and docs/SESSIONS.md (storage). Only Chrome w
 
 ## Next steps
 
-1. Push to a Git remote and let CI run the Windows/Linux/Node 22.13–24 matrix.
+1. Phase 3 (adaptive intelligence): plan in [tasks/PHASE3.md](tasks/PHASE3.md) — three decisions to confirm first.
 2. Connect from Claude Code/Codex with `.mcp.json` and try the maker-checker prompt on the fixture app.
 3. Publish to npm; then build the TG Studio event consumer.

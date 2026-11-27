@@ -132,6 +132,7 @@ export function formatAction(r: ActionResult, format: 'text' | 'json'): ToolOutp
     if (report.validationMessages?.length) lines.push(`Validation: ${report.validationMessages.join('; ')}`);
   }
   if (r.pageState) lines.push(r.pageState);
+  if (r.memory) lines.push(r.memory);
   for (const w of r.warnings) lines.push(`⚠ ${w}`);
   if (r.newPages?.length)
     lines.push(

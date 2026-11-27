@@ -89,7 +89,8 @@ describe('SQLite storage', () => {
     expect(db.get("SELECT * FROM storage_state WHERE key='test'")).toBeUndefined();
     db.close();
     db = new SqliteAdapter(dir);
-    expect(db.all('SELECT * FROM schema_migrations')).toHaveLength(1);
+    // Version 1 (runs/artifacts) + version 2 (Browser Memory, TGB-018), each applied once.
+    expect(db.all('SELECT * FROM schema_migrations')).toHaveLength(2);
     db.close();
   });
   it('round trips steps, isolates projects and redacts secrets before persistence', () => {

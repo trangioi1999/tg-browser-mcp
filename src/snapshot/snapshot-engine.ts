@@ -33,6 +33,8 @@ export interface Snapshot {
   url: string;
   title: string;
   framework?: string;
+  /** Build metadata of the main document (memory invalidation signal only). */
+  buildHint?: string;
   /** Main document id: changes when the page navigates. */
   docId: string;
   nodes: RawNode[];
@@ -245,6 +247,7 @@ export async function captureSnapshot(
     url: page.url(),
     title: res?.meta.title ?? (await page.title().catch(() => '')),
     ...(res?.meta.framework ? { framework: res.meta.framework } : {}),
+    ...(res?.meta.buildHint ? { buildHint: res.meta.buildHint } : {}),
     docId: res?.docId ?? '',
     nodes,
     nodeCount: res?.meta.nodeCount ?? 0,

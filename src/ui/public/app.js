@@ -256,6 +256,120 @@ async function overview() {
   for (const r of runs.slice(0, 10)) await runView(r, list, false);
 }
 
+// ───────── Memory Explorer (read-only). Names come from web pages: textContent only, shown quoted. ─────────
+const quoted = (v) => JSON.stringify(String(v ?? ''));
+function table(parent, headers) {
+  const wrap = el('div', undefined, parent, 'table-wrap');
+  const t = el('table', undefined, wrap);
+  const head = el('tr', undefined, el('thead', undefined, t));
+  for (const [h, cls] of headers) el('th', h, head, cls);
+  return el('tbody', undefined, t);
+}
+async function memoryList() {
+  pageHead(
+    'Bộ nhớ trình duyệt',
+    'Chỉ đọc. Hình dạng trang đã quan sát (không lưu giá trị). Tên phần tử lấy từ website: dữ liệu không đáng tin',
+  );
+  const scopes = await api('memory');
+  const r = region('Phạm vi', main, scopes.length ? `${scopes.length} phạm vi` : undefined);
+  if (!scopes.length)
+    return empty('Chưa có bộ nhớ. Bật memory.enabled trong Cài đặt rồi chụp snapshot một trang', r);
+  const body = table(r, [['Dự án'], ['Origin'], ['Môi trường'], ['Auth context'], ['Trang', 'n']]);
+  for (const s of scopes) {
+    const row = el('tr', undefined, body);
+    const a = el('a', s.project, el('td', undefined, row), 'session-link');
+    a.href = `#memory/${encodeURIComponent(s.project)}/${s.id}`;
+    el('td', s.origin, row, 'mono');
+    el('td', s.environment, row, 'muted');
+    el('td', s.authContext, row, 'muted');
+    el('td', String(s.pages), row, 'n');
+  }
+}
+async function memoryScope(project, scopeId) {
+  const data = await api(`memory/${encodeURIComponent(project)}/${encodeURIComponent(scopeId)}`);
+  pageHead(data.scope.origin, `${project} · ${data.scope.environment} · ${data.scope.authContext}`, {
+    label: 'Bộ nhớ',
+    href: '#memory',
+  });
+  const r = region('Trang và phiên bản', main, `${data.pages.length} trang`);
+  if (!data.pages.length) empty('Chưa có trang nào', r);
+  const body = table(r, [
+    ['Route'],
+    ['Phiên bản'],
+    ['Trạng thái'],
+    ['Biến thể'],
+    ['Lần thấy', 'n'],
+    ['Phần tử', 'n'],
+    ['Lần cuối'],
+  ]);
+  for (const p of data.pages)
+    for (const v of p.versions) {
+      const row = el('tr', undefined, body);
+      el('td', p.routeKey, row, 'mono');
+      const a = el('a', `v${v.versionNo}`, el('td', undefined, row), 'session-link');
+      a.href = `#memory/${encodeURIComponent(project)}/${scopeId}/${v.id}`;
+      el(
+        'span',
+        v.status,
+        el('td', undefined, row),
+        `pill ${v.status === 'active' ? 'ok' : v.status === 'verified' ? 'ok' : 'warn'}`,
+      );
+      el('td', v.variantKey ? quoted(v.variantKey) : '—', row, 'mono muted');
+      el('td', String(v.observations), row, 'n');
+      el('td', `${v.elementCount}${v.capped ? ' (giới hạn)' : ''}`, row, 'n');
+      el('td', dateTime(v.lastSeenAt), row, 'muted');
+    }
+  const ev = region('Nhật ký bộ nhớ', main, 'memory_events');
+  if (!data.events.length) empty('Chưa có sự kiện', ev);
+  else {
+    const eb = table(ev, [['Thời điểm'], ['Tác nhân'], ['Sự kiện'], ['Đối tượng']]);
+    for (const e of data.events) {
+      const row = el('tr', undefined, eb);
+      el('td', dateTime(e.ts), row, 'muted');
+      el('td', e.actor, row);
+      el('td', e.kind, row, 'mono');
+      el('td', e.subject, row, 'mono muted');
+    }
+  }
+}
+async function memoryVersion(project, scopeId, versionId) {
+  const data = await api(
+    `memory/${encodeURIComponent(project)}/${encodeURIComponent(scopeId)}/versions/${encodeURIComponent(versionId)}`,
+  );
+  pageHead(
+    `Phiên bản v${data.version.versionNo}`,
+    `${data.version.status} · ${data.version.observations} lần thấy`,
+    {
+      label: 'Phạm vi',
+      href: `#memory/${encodeURIComponent(project)}/${scopeId}`,
+    },
+  );
+  const r = region('Phần tử', main, 'Tên hiển thị trong ngoặc kép là dữ liệu từ website');
+  if (!data.elements.length) return empty('Không có phần tử', r);
+  const body = table(r, [['Vai trò'], ['Tên'], ['Khoá'], ['Ngữ cảnh'], ['Xác minh']]);
+  for (const e of data.elements) {
+    const row = el('tr', undefined, body);
+    el('td', e.role, row, 'mono');
+    el('td', quoted(e.fingerprint.name), row);
+    const k = e.fingerprint.keys;
+    el(
+      'td',
+      [
+        k.testId && `testId=${quoted(k.testId)}`,
+        k.formControl && `formControl=${quoted(k.formControl)}`,
+        k.nameAttr && `name=${quoted(k.nameAttr)}`,
+        k.id && `id=${quoted(k.id)}`,
+      ]
+        .filter(Boolean)
+        .join(' '),
+      row,
+      'mono muted',
+    );
+    el('td', e.fingerprint.container ?? e.fingerprint.group ?? '', row, 'muted');
+    el('td', e.verifiedAt ? dateTime(e.verifiedAt) : '—', row, 'muted');
+  }
+}
+
 async function sessionList() {
   pageHead(
     'Sessions',
@@ -1107,6 +1221,10 @@ async function route() {
     if (parts[0] === 'settings') await settings();
     else if (parts[0] === 'sessions') await sessionList();
     else if (parts[0] === 'workflows') await workflowList();
+    else if (parts[0] === 'memory' && parts[3])
+      await memoryVersion(decodeURIComponent(parts[1]), parts[2], parts[3]);
+    else if (parts[0] === 'memory' && parts[2]) await memoryScope(decodeURIComponent(parts[1]), parts[2]);
+    else if (parts[0] === 'memory') await memoryList();
     else if (parts[0] === 'workflow')
       await workflowDetail(decodeURIComponent(parts[1]), decodeURIComponent(parts[2]));
     else if (parts[0] === 'session')
@@ -1128,6 +1246,7 @@ const NAV_ICONS = {
   '#overview': 'overview',
   '#sessions': 'sessions',
   '#workflows': 'workflow',
+  '#memory': 'trace',
   '#settings': 'settings',
 };
 document.querySelectorAll('nav a').forEach((a) => icon(NAV_ICONS[a.hash], a));

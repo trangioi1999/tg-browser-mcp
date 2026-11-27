@@ -48,6 +48,23 @@ When a policy is `ask`, the server sends an MCP **elicitation** request to the c
 
 Page content is data. The server instructions tell the model so explicitly, snapshots render text as quoted data (never as instructions), and every dangerous capability is gated by policy rather than by the model's judgment: even a fully hijacked agent cannot reach metadata endpoints, private networks, local files outside the roots, or perform approval-gated actions without the human.
 
+## Browser Memory (opt-in)
+
+Memory (`memory.enabled`, off by default) stores page _shape_ only, never values, typed input, cookies, tokens,
+table cells or free text (a test scans the database file for fixture secrets). Controls against poisoning and
+injection (review doc 11 §3):
+
+- Only complete snapshots are recorded; elements per page, pages per scope and unverified versions per page are capped.
+- A version becomes verified only through a `VERIFIED` action outcome on a uniquely matched element; activation
+  of another version is an operator action (`tg-browser-mcp memory activate`).
+- Stored labels are control/zero-width/bidi-stripped, capped at 200 characters and normalized (digits, ids,
+  emails, tokens); model-facing output renders them JSON-quoted and never puts them in instructions or tool descriptions.
+- Scope = (project, origin, environment, auth context). The auth context comes from configuration or the SDK
+  caller, never from cookies or model arguments; every repository read is bound to a scope of the caller's project.
+- No MCP tool writes memory: `memory_page_info` is read-only; purge/activate exist only in the CLI, and the
+  dashboard Memory Explorer is read-only. Mutations are audited in `memory_events`.
+- Memory is a hint: no action is ever executed from memory, approvals are never cached in it.
+
 ## Limitations (honest)
 
 - Redirect hops of **sub-resources** (fetch/img) are not interceptable by Playwright routes; the target host may receive a blind GET. The response is not committed to a document we snapshot. Use `allowedDomains` and network controls for high-assurance setups.

@@ -35,6 +35,8 @@ export interface CreateSessionOptions {
   openPage?: boolean;
   locale?: string;
   timezoneId?: string;
+  /** Browser Memory auth context label (e.g. `maker`); default: config `memory.authContext`. */
+  authContext?: string;
 }
 
 const BLOCKED_PAGE = (reason: string) =>
@@ -211,6 +213,7 @@ export class SessionManager {
   async create(opts: CreateSessionOptions): Promise<Session> {
     const name = assertSafeName('session', opts.name);
     const project = assertSafeName('project', opts.project ?? this.cfg.project);
+    if (opts.authContext !== undefined) assertSafeName('authContext', opts.authContext);
     const k = this.key(project, name);
     if (this.creating.has(k)) {
       throw new TgError(
@@ -279,7 +282,7 @@ export class SessionManager {
       context = await browser.newContext(ctxOpts);
       browserId = id;
     }
-    return this.adopt(context, {
+    const session = await this.adopt(context, {
       name,
       project,
       browserId,
@@ -291,6 +294,8 @@ export class SessionManager {
       retainVideo: opts.recordVideo === undefined && this.cfg.recording.video === 'retain-on-failure',
       indicator: this.cfg.browser.indicator ?? !this.browsers.defaultSpec(opts.browser).headless,
     });
+    if (opts.authContext !== undefined) session.authContext = opts.authContext;
+    return session;
   }
 
   /** Attaches an existing Chromium (CDP). The session wraps the browser's default context. */

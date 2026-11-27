@@ -7,6 +7,9 @@ tg-browser-mcp doctor [--url <u>] [--no-launch]
 tg-browser-mcp browsers            Detected browsers (system + Playwright-managed)
 tg-browser-mcp sessions            Saved sessions of the project
 tg-browser-mcp workflows           Saved workflows and recent runs
+tg-browser-mcp memory list         Browser Memory scopes and pages of the project
+tg-browser-mcp memory purge [--scope <id>] --yes      Delete memory of the project (or one scope)
+tg-browser-mcp memory activate --scope <id> --version-id <id>   Activate a page version (operator)
 tg-browser-mcp --help | --version
 ```
 
