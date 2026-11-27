@@ -119,6 +119,6 @@ See docs/SECURITY.md (limitations) and docs/SESSIONS.md (storage). Only Chrome w
 
 ## Next steps
 
-1. Push to a Git remote and let CI run the Windows/Linux/Node 22.13–24 matrix.
+1. Phase 3 (adaptive intelligence): plan in [tasks/PHASE3.md](tasks/PHASE3.md) — three decisions to confirm first.
 2. Connect from Claude Code/Codex with `.mcp.json` and try the maker-checker prompt on the fixture app.
 3. Publish to npm; then build the TG Studio event consumer.
